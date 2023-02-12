@@ -1,0 +1,96 @@
+package javafxapplication1;
+
+import java.awt.Insets;
+import javafx.application.Application;
+import javafx.event.ActionEvent;
+import javafx.event.EventHandler;
+import javafx.scene.Scene;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.layout.FlowPane;
+import javafx.scene.layout.GridPane;
+import javafx.geometry.*;
+import javafx.scene.control.TextArea;
+import javafx.scene.layout.ColumnConstraints;
+import javafx.scene.layout.RowConstraints;
+
+
+import javafx.scene.layout.StackPane;
+import javafx.stage.Stage;
+
+/**
+ *
+ * @author User
+ */
+public class JavaFXApplication5 extends Application {
+    
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+    
+  
+
+    @Override
+    public void start(Stage primaryStage) throws Exception {
+        primaryStage.setTitle("Это заголовок");
+        primaryStage.setWidth(500);
+        primaryStage.setHeight(250);
+        primaryStage.setResizable(false);
+        
+        
+        
+        Button btn = new Button("click!");
+        btn.setOnAction(new EventHandler<ActionEvent>(){
+            @Override
+            public void handle(ActionEvent event) {
+                //System.out.println("12345");
+                primaryStage.close();
+            }
+        
+        });
+        //StackPane root = new StackPane();
+        
+        GridPane root = new GridPane();
+        root.setAlignment(Pos.CENTER);
+        TextArea textArea = new TextArea("TextArea in StackPane");
+        textArea.setEditable(false);
+        
+        //root.setGridLinesVisible(true);
+        RowConstraints row1 = new RowConstraints();
+        row1.setPrefHeight(150);
+        
+        root.getRowConstraints().add(row1);
+         
+        RowConstraints row2 = new RowConstraints();
+        row2.setPrefHeight(50);
+        
+        root.getRowConstraints().add(row2);
+         
+        //root.setGridLinesVisible(true);
+        root.add(textArea, 0, 0);
+        root.add(btn, 0, 1);
+        
+
+//        root.addRow( 0,textArea);
+//        root.addRow( 1,btn);
+        GridPane.setHalignment(btn, HPos.CENTER);
+        
+//        ColumnConstraints columnConstraints = new ColumnConstraints();
+//        columnConstraints.setPrefWidth(400.0);
+//        root.getColumnConstraints().addAll(columnConstraints);
+        
+        //TextArea textArea = new TextArea("TextArea in StackPane");
+        //StackPane.setMargin(textArea, new javafx.geometry.Insets(0.0, 0.0, 50.0, 0.0));
+        //StackPane.setMargin(btn, new javafx.geometry.Insets(150.0, 0.0, 0.0, 0.0));
+        //StackPane.setAlignment(btn, Pos.CENTER);
+        //root.getChildren().addAll(textArea,btn);
+        
+        Scene scene = new Scene(root);
+        primaryStage.setScene(scene);
+        
+                
+        primaryStage.show();
+    }
+    
+}
