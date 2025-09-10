@@ -68,12 +68,20 @@ fi
 echo "[INFO] Удаление предыдущих бэкапов за сегодня..." | tee -a "$LOG_FILE"
 rm -f "$BACKUP_PATH" 2>/dev/null
 
-# Создание архива
+# Создание архива с логом ошибок
+ERROR_LOG="${LOG_FILE}.errors"
+: > "$ERROR_LOG"   # очищаем файл ошибок перед запуском
+
 echo "[INFO] Создание архива Keycloak..." | tee -a "$LOG_FILE"
-if ! tar -cpzf "$BACKUP_PATH" -C / "${KC_DIRS[@]/#\//}"; then
+if ! tar -cpzf "$BACKUP_PATH" --ignore-failed-read -C / "${KC_DIRS[@]/#\//}" 2>>"$ERROR_LOG"; then
     echo "[ERROR] Ошибка создания архива!" | tee -a "$LOG_FILE"
     rm -f "$BACKUP_PATH"
     exit 1
+fi
+
+# Проверяем, были ли пропущенные файлы
+if [ -s "$ERROR_LOG" ]; then
+    echo "[WARNING] Некоторые файлы не попали в архив! См. $ERROR_LOG" | tee -a "$LOG_FILE"
 fi
 
 # Проверка размера архива
