@@ -1,0 +1,131 @@
+#!/bin/bash
+# Скрипт резервного копирования папок Keycloak 16 в Docker
+# Автоматически обрабатывает конфликты имен и проверяет целостность
+
+### КОНФИГУРИРУЕМЫЕ ПАРАМЕТРЫ ###
+# Список директорий на хосте для бэкапа
+KC_DIRS=(
+"/var/keycloak_data_mod/cert"
+"/var/keycloak_data_mod/keytab"
+"/var/keycloak_data_mod/conf"
+"/var/keycloak_data_mod/configuration"
+"/var/keycloak_data_mod/tmp"
+"/var/keycloak_data_mod/themes"
+"/var/keycloak_data_mod/log"
+"/var/keycloak_data_mod/deployments"
+)
+
+LOCAL_BACKUP_DIR="/var/backups/keycloak"       # Локальная директория для бэкапов
+REMOTE_BACKUP_DIR="/mnt/backup_storage/keycloak" # Удаленная директория
+REMOTE_USER="backupuser"                        # Пользователь для SSH
+REMOTE_HOST="keyv"                              # Хост сервера-приемника
+RETENTION_DAYS=30                               # Дней хранения бэкапов
+COMPRESSION_LEVEL=6                             # Уровень сжатия (1-9)
+COPY_METHOD="SCP"                               # Метод копирования: SCP или RSYNC
+MIN_BACKUP_SIZE=10240                            # Минимальный размер архива (10 КБ)
+BACKUP_PREFIX="keycloak"
+
+LOG_FILE="/var/log/keycloak_backup.log"         # Файл журнала
+### КОНЕЦ КОНФИГУРИРУЕМЫХ ПАРАМЕТРОВ ###
+
+# Генерация временной метки
+TIMESTAMP=$(date +%Y%m%d)
+BACKUP_FILE="${BACKUP_PREFIX}_${TIMESTAMP}.tar.gz"
+BACKUP_PATH="$LOCAL_BACKUP_DIR/$BACKUP_FILE"
+
+echo "===== [$(date)] Начало резервного копирования Keycloak =====" | tee -a "$LOG_FILE"
+echo "[INFO] Папки для бэкапа: ${KC_DIRS[*]}" | tee -a "$LOG_FILE"
+
+# Проверка существования локальной директории
+if [ ! -d "$LOCAL_BACKUP_DIR" ]; then
+    echo "[INFO] Директория $LOCAL_BACKUP_DIR не существует, создаем..." | tee -a "$LOG_FILE"
+    mkdir -p "$LOCAL_BACKUP_DIR"
+fi
+
+# Проверка прав записи
+if [ ! -w "$LOCAL_BACKUP_DIR" ]; then
+    echo "[ERROR] Нет прав на запись в $LOCAL_BACKUP_DIR!" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+# Проверка зависимостей
+for cmd in tar gzip ssh; do
+    if ! command -v $cmd &> /dev/null; then
+        echo "[ERROR] Отсутствует необходимая команда: $cmd" | tee -a "$LOG_FILE"
+        exit 1
+    fi
+done
+
+# Проверка свободного места (минимум 1 ГБ)
+MIN_SPACE_KB=$((1024 * 1024))
+AVAILABLE_SPACE=$(df -k --output=avail "$LOCAL_BACKUP_DIR" | awk 'NR==2 {print $1}')
+if [ "$AVAILABLE_SPACE" -lt "$MIN_SPACE_KB" ]; then
+  echo "[ERROR] Недостаточно места! Доступно: $((AVAILABLE_SPACE/1024)) MB" | tee -a "$LOG_FILE"
+  exit 1
+fi
+
+# Удаление предыдущих бэкапов за сегодня
+echo "[INFO] Удаление предыдущих бэкапов за сегодня..." | tee -a "$LOG_FILE"
+rm -f "$BACKUP_PATH" 2>/dev/null
+
+# Создание архива
+echo "[INFO] Создание архива Keycloak..." | tee -a "$LOG_FILE"
+if ! tar -cpzf "$BACKUP_PATH" -C / "${KC_DIRS[@]/#\//}"; then
+    echo "[ERROR] Ошибка создания архива!" | tee -a "$LOG_FILE"
+    rm -f "$BACKUP_PATH"
+    exit 1
+fi
+
+# Проверка размера архива
+ARCHIVE_SIZE=$(stat -c%s "$BACKUP_PATH")
+if [ "$ARCHIVE_SIZE" -lt "$MIN_BACKUP_SIZE" ]; then
+    echo "[ERROR] Размер архива слишком мал: $ARCHIVE_SIZE байт" | tee -a "$LOG_FILE"
+    rm -f "$BACKUP_PATH"
+    exit 1
+fi
+
+# Валидация архива
+echo "[INFO] Проверка целостности архива..." | tee -a "$LOG_FILE"
+if ! gzip -t "$BACKUP_PATH"; then
+    echo "[CRITICAL] Обнаружен поврежденный бэкап!" | tee -a "$LOG_FILE"
+    rm -f "$BACKUP_PATH"
+    exit 1
+fi
+
+# Копирование на удаленный сервер
+echo "[INFO] Копирование файла $BACKUP_FILE на $REMOTE_HOST..." | tee -a "$LOG_FILE"
+ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p '$REMOTE_BACKUP_DIR'"
+
+case $COPY_METHOD in
+    RSYNC)
+        echo "[DETAIL] Метод: rsync" | tee -a "$LOG_FILE"
+        rsync -avz -e ssh "$BACKUP_PATH" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_BACKUP_DIR/"
+        ;;
+    SCP)
+        echo "[DETAIL] Метод: scp" | tee -a "$LOG_FILE"
+        scp -o BatchMode=yes -o ConnectTimeout=30 "$BACKUP_PATH" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_BACKUP_DIR/"
+        ;;
+    *)
+        echo "[ERROR] Недопустимый метод копирования: $COPY_METHOD!" | tee -a "$LOG_FILE"
+        exit 1
+        ;;
+esac
+
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Ошибка копирования файла!" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+# Ротация локальных бэкапов
+echo "[INFO] Очистка локальных бэкапов старше $RETENTION_DAYS дней..." | tee -a "$LOG_FILE"
+find "$LOCAL_BACKUP_DIR" -name "${BACKUP_PREFIX}_*.tar.gz" -mtime +$RETENTION_DAYS -delete -print | tee -a "$LOG_FILE"
+
+# Завершение
+echo "[SUCCESS] Резервное копирование Keycloak завершено." | tee -a "$LOG_FILE"
+echo "[INFO] Размер архива: $ARCHIVE_SIZE байт" | tee -a "$LOG_FILE"
+echo "[INFO] Локальный файл: $BACKUP_FILE" | tee -a "$LOG_FILE"
+echo "[INFO] Удаленный файл: $REMOTE_BACKUP_DIR/$BACKUP_FILE" | tee -a "$LOG_FILE"
+echo "===== [$(date)] Процесс завершен =====" | tee -a "$LOG_FILE"
+
+exit 0
+
