@@ -1,7 +1,7 @@
-echo "[INFO] Ждём, пока база данных будет готова..."
-until docker exec mariadb mysql -u keycloak -p1234 -e "SELECT 1;" &>/dev/null; do
+# Ждём окончания инициализации
+until docker logs mariadb 2>&1 | grep -q "MariaDB init process done. Ready for start up."; do
   sleep 5
-  echo "[WAIT] БД ещё не готова, пробуем снова..."
+  echo "[WAIT] Восстановление базы ещё не закончено..."
 done
 
-echo "[INFO] БД готова, запускаем Keycloak..."
+echo "[INFO] База готова!"
