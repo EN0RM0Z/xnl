@@ -1,23 +1,7 @@
-#!/bin/bash
-set -e
+echo "[INFO] Ждём, пока база данных будет готова..."
+until docker exec mariadb mysql -u keycloak -p1234 -e "SELECT 1;" &>/dev/null; do
+  sleep 5
+  echo "[WAIT] БД ещё не готова, пробуем снова..."
+done
 
-TARGET_DIR="/var/ntm"
-
-# Проверяем, существует ли директория
-if [ ! -d "$TARGET_DIR" ]; then
-    echo "[ERROR] Директория $TARGET_DIR не существует!"
-    exit 1
-fi
-
-# Удаляем всё содержимое (все файлы, папки и подпапки)
-echo "[INFO] Очищаем $TARGET_DIR..."
-rm -rf "${TARGET_DIR:?}/"*
-
-# Проверяем, пуста ли директория
-if [ "$(ls -A "$TARGET_DIR")" ]; then
-    echo "[ERROR] Директория $TARGET_DIR всё ещё содержит файлы!"
-    exit 1
-else
-    echo "[SUCCESS] Директория $TARGET_DIR успешно очищена."
-fi
-
+echo "[INFO] БД готова, запускаем Keycloak..."
