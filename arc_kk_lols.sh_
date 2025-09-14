@@ -3,54 +3,59 @@
 # === ПАРАМЕТРЫ ===
 LOG_DIR="/var/log/rsys"
 ARCHIVE_DIR="/var/log/rsys/archive"
-DAYS_TO_KEEP=10          # сколько дней храним обычные логи
-ARCHIVE_DAYS_TO_KEEP=60  # сколько дней храним архивы
+DAYS_TO_KEEP=10           # через сколько дней архивировать server.log
+ARCHIVE_DAYS_TO_KEEP=60   # сколько дней хранить архивы
+DAYS_TO_ACCESS=30         # сколько дней хранить access.*.log
 
-mkdir -p "$ARCHIVE_DIR"
+# Если файлов по шаблону нет, цикл for не будет обрабатывать строку-шаблон как имя файла
+shopt -s nullglob   
 
-# Текущая дата (00:00:00 сегодняшнего дня)
-NOW=$(date -d "$(date +%Y-%m-%d)" +%s)
+# === ТЕКУЩАЯ ДАТА (обрезанная до дня: без часов, минут и секунд) ===
+TODAY=$(date +%s -d "$(date +%Y-%m-%d)")
 
-# === ОБРАБОТКА ЛОГОВ ===
+# === ФУНКЦИЯ: преобразует год, месяц и день в timestamp (секунды с 1970-01-01) ===
+get_file_date() {
+    local year=$1
+    local month=$2
+    local day=$3
+    date -d "$year-$month-$day" +%s
+}
+
+# --- ОБРАБОТКА файлов server.log.YYYY-MM-DD[.n] ---
 for file in "$LOG_DIR"/server.log.*; do
-    filename=$(basename "$file")
+    [[ -f "$file" ]] || continue   # пропускаем, если не файл
 
-    # Проверяем шаблон: server.log.yyyy-mm-dd[.n]
-    if [[ "$filename" =~ server\.log\.([0-9]{4})-([0-9]{2})-([0-9]{2})(\.[0-9]+)?$ ]]; then
-        year="${BASH_REMATCH[1]}"
-        month="${BASH_REMATCH[2]}"
-        day="${BASH_REMATCH[3]}"
+    # Ищем дату в имени файла (регулярное выражение с 3 группами: год, месяц, день)
+    if [[ "$file" =~ server\.log\.([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
+        # Достаём дату из имени файла
+        file_date=$(get_file_date "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
 
-        # Дата файла (в 00:00:00)
-        file_date=$(date -d "$year-$month-$day" +%s)
+        # Разница между сегодня и датой файла в днях
+        age=$(( (TODAY - file_date) / 86400 ))
 
-        diff_days=$(( (NOW - file_date) / 86400 ))
-
-        # Если старше DAYS_TO_KEEP → архивируем
-        if (( diff_days > DAYS_TO_KEEP )); then
-            gzip -c "$file" > "$ARCHIVE_DIR/$filename.gz"
-            rm -f "$file"
+        # Архивируем файл, если он старше DAYS_TO_KEEP
+        if (( age > DAYS_TO_KEEP )); then
+            gzip -f "$file"                  # сжимаем файл (исходник при этом удаляется)
+            mv "$file.gz" "$ARCHIVE_DIR"/    # переносим архив в отдельную папку
         fi
     fi
 done
 
-# === ОБРАБОТКА АРХИВОВ ===
-for file in "$ARCHIVE_DIR"/server.log.*.gz; do
-    filename=$(basename "$file")
+# --- УДАЛЕНИЕ архивов, которые слишком старые ---
+# find подбирает *.gz в архивной папке и удаляет те, что старше ARCHIVE_DAYS_TO_KEEP
+find "$ARCHIVE_DIR" -type f -name "server.log.*.gz" -mtime +$ARCHIVE_DAYS_TO_KEEP -exec rm -f {} \;
 
-    # Проверяем шаблон: server.log.yyyy-mm-dd[.n].gz
-    if [[ "$filename" =~ server\.log\.([0-9]{4})-([0-9]{2})-([0-9]{2})(\.[0-9]+)?\.gz$ ]]; then
-        year="${BASH_REMATCH[1]}"
-        month="${BASH_REMATCH[2]}"
-        day="${BASH_REMATCH[3]}"
+# --- ОБРАБОТКА access.YYYY-MM-DD.log ---
+for file in "$LOG_DIR"/access.*.log; do
+    [[ -f "$file" ]] || continue
 
-        # Дата архива (в 00:00:00)
-        file_date=$(date -d "$year-$month-$day" +%s)
+    # В имени ищем дату (год-месяц-день)
+    if [[ "$file" =~ access\.([0-9]{4})-([0-9]{2})-([0-9]{2})\.log ]]; then
+        file_date=$(get_file_date "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+        age=$(( (TODAY - file_date) / 86400 ))
 
-        diff_days=$(( (NOW - file_date) / 86400 ))
-
-        # Если старше ARCHIVE_DAYS_TO_KEEP → удаляем архив
-        if (( diff_days > ARCHIVE_DAYS_TO_KEEP )); then
+        # Если файл старше DAYS_TO_ACCESS — удаляем
+        if (( age > DAYS_TO_ACCESS )); then
             rm -f "$file"
         fi
     fi
