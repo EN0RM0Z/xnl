@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# === ПАРАМЕТРЫ ===
+LOG_DIR="/var/log/rsys"
+ARCHIVE_DIR="/var/log/rsys/archive"
+DAYS_TO_KEEP=10          # сколько дней храним обычные логи
+ARCHIVE_DAYS_TO_KEEP=60  # сколько дней храним архивы
+
+mkdir -p "$ARCHIVE_DIR"
+
+# Текущая дата (00:00:00 сегодняшнего дня)
+NOW=$(date -d "$(date +%Y-%m-%d)" +%s)
+
+# === ОБРАБОТКА ЛОГОВ ===
+for file in "$LOG_DIR"/server.log.*; do
+    filename=$(basename "$file")
+
+    # Проверяем шаблон: server.log.yyyy-mm-dd[.n]
+    if [[ "$filename" =~ server\.log\.([0-9]{4})-([0-9]{2})-([0-9]{2})(\.[0-9]+)?$ ]]; then
+        year="${BASH_REMATCH[1]}"
+        month="${BASH_REMATCH[2]}"
+        day="${BASH_REMATCH[3]}"
+
+        # Дата файла (в 00:00:00)
+        file_date=$(date -d "$year-$month-$day" +%s)
+
+        diff_days=$(( (NOW - file_date) / 86400 ))
+
+        # Если старше DAYS_TO_KEEP → архивируем
+        if (( diff_days > DAYS_TO_KEEP )); then
+            gzip -c "$file" > "$ARCHIVE_DIR/$filename.gz"
+            rm -f "$file"
+        fi
+    fi
+done
+
+# === ОБРАБОТКА АРХИВОВ ===
+for file in "$ARCHIVE_DIR"/server.log.*.gz; do
+    filename=$(basename "$file")
+
+    # Проверяем шаблон: server.log.yyyy-mm-dd[.n].gz
+    if [[ "$filename" =~ server\.log\.([0-9]{4})-([0-9]{2})-([0-9]{2})(\.[0-9]+)?\.gz$ ]]; then
+        year="${BASH_REMATCH[1]}"
+        month="${BASH_REMATCH[2]}"
+        day="${BASH_REMATCH[3]}"
+
+        # Дата архива (в 00:00:00)
+        file_date=$(date -d "$year-$month-$day" +%s)
+
+        diff_days=$(( (NOW - file_date) / 86400 ))
+
+        # Если старше ARCHIVE_DAYS_TO_KEEP → удаляем архив
+        if (( diff_days > ARCHIVE_DAYS_TO_KEEP )); then
+            rm -f "$file"
+        fi
+    fi
+done
