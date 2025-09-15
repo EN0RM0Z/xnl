@@ -1,0 +1,38 @@
+# Создание и сжатие дампа БД (все базы одной командой, налету)
+echo "[INFO] Создание и сжатие дампа баз данных..." | tee -a "$LOG_FILE"
+
+START_TIME=$(date +%s)
+
+# Снимаем дамп и сразу сжимаем
+if ! mysqldump --defaults-extra-file="$MYSQL_CNF" \
+              --single-transaction \
+              --quick \
+              --routines \
+              --triggers \
+              --events \
+              --databases "${DB_NAMES[@]}" \
+    | gzip -"$COMPRESSION_LEVEL" > "$BACKUP_PATH"; then
+    echo "[ERROR] Ошибка создания/сжатия дампа баз данных!" | tee -a "$LOG_FILE"
+    rm -f "$BACKUP_PATH" 2>/dev/null
+    exit 1
+fi
+
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+
+# Проверка размера сжатого дампа
+DUMP_SIZE=$(stat -c%s "$BACKUP_PATH")
+if [ "$DUMP_SIZE" -lt "$MIN_DUMP_SIZE" ]; then
+    echo "[ERROR] Размер сжатого дампа слишком мал: $DUMP_SIZE байт (минимально: $MIN_DUMP_SIZE байт)" | tee -a "$LOG_FILE"
+    rm -f "$BACKUP_PATH"
+    exit 1
+fi
+
+# Выводим статистику
+HUMAN_SIZE=$(du -h "$BACKUP_PATH" | cut -f1)
+SPEED=$(( DUMP_SIZE / ELAPSED / 1024 / 1024 )) # MB/s
+
+echo "[INFO] Дамп успешно создан: $BACKUP_PATH" | tee -a "$LOG_FILE"
+echo "[INFO] Размер файла: $HUMAN_SIZE (≈$DUMP_SIZE байт)" | tee -a "$LOG_FILE"
+echo "[INFO] Время выполнения: ${ELAPSED} сек" | tee -a "$LOG_FILE"
+echo "[INFO] Средняя скорость записи: ${SPEED} MB/s" | tee -a "$LOG_FILE"
