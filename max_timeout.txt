@@ -1,0 +1,10 @@
+# Максимальное время ожидания (например, 600 секунд = 10 минут)
+MAX_WAIT=600
+
+
+    # Проверяем таймаут
+    if [ $ELAPSED -ge $MAX_WAIT ]; then
+        echo
+        echo "[ERROR] Превышено время ожидания ($ELAPSED_HM). MariaDB так и не запустился." | tee -a "$LOG_FILE"
+        exit 1
+    fi
