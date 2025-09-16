@@ -1,0 +1,10 @@
+# Находим самый свежий файл по дате в имени
+latest_file=$(ls -1 "$S_DIR"/kk_*.gz | sort -t_ -k2,2 | tail -n 1)
+
+# Проверка, что файл найден
+if [[ -n "$latest_file" ]]; then
+    echo "Копирую файл: $latest_file → $D_DIR"
+    cp "$latest_file" "$D_DIR/"
+else
+    echo "Файлы вида kk_yyyymmdd.gz не найдены в $S_DIR"
+fi
