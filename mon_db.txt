@@ -1,0 +1,31 @@
+# Ждём окончания инициализации с мониторингом
+START_TIME=$(date +%s)
+LOG_FILE="/var/log/db_restore_monitor.log"
+
+echo "[INFO] Запущен мониторинг восстановления базы" | tee -a "$LOG_FILE"
+
+while ! docker logs mariadb 2>&1 | grep -q "MariaDB init process done. Ready for start up."; do
+    sleep 10
+
+    # Считаем время
+    NOW=$(date +%s)
+    ELAPSED=$((NOW - START_TIME))
+    ELAPSED_HM=$(printf "%02d:%02d:%02d" $((ELAPSED/3600)) $((ELAPSED/60%60)) $((ELAPSED%60)))
+
+    # Смотрим размер папки (замени путь на свой если другой)
+    SIZE=$(du -sh /var/keycloak_data_mod 2>/dev/null | awk '{print $1}')
+
+    # Выводим в одну строку
+    echo -ne "\r[WAIT] Идёт восстановление... прошло $ELAPSED_HM, размер $SIZE   "
+
+    # Пишем в лог
+    echo "[WAIT] $ELAPSED_HM | Размер: $SIZE" >> "$LOG_FILE"
+done
+
+# По завершении
+END_TIME=$(date +%s)
+TOTAL=$((END_TIME - START_TIME))
+TOTAL_HM=$(printf "%02d:%02d:%02d" $((TOTAL/3600)) $((TOTAL/60%60)) $((TOTAL%60)))
+
+echo -ne "\r[INFO] База готова! Общее время: $TOTAL_HM, итоговый размер: $SIZE\n"
+echo "[INFO] База готова! Общее время: $TOTAL_HM, итоговый размер: $SIZE" | tee -a "$LOG_FILE"
