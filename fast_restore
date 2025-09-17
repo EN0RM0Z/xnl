@@ -1,0 +1,42 @@
+#!/bin/bash
+set -e
+
+DB_ROOT_PASS="12345"
+DB_NAME="keycloak"
+DUMP_FILE="/var/backups/keycloak/vkm_18_04_2025.sql.gz"
+
+echo "[INFO] Запускаем MariaDB контейнер..."
+docker run -d \
+  --name mariadb \
+  --network keycloak-network \
+  -p 3306:3306 \
+  -v /var/keycloak_data:/var/lib/mysql \
+  -e MYSQL_ROOT_PASSWORD=$DB_ROOT_PASS \
+  -e MYSQL_DATABASE=$DB_NAME \
+  mariadb:10.5
+
+echo "[INFO] Ждём запуск базы..."
+sleep 20
+
+echo "[INFO] Проверяем соединение..."
+mysql -h127.0.0.1 -P3306 -uroot -p$DB_ROOT_PASS -e "SELECT 1;"
+
+echo "[INFO] Отключаем проверки для ускорения..."
+mysql -h127.0.0.1 -P3306 -uroot -p$DB_ROOT_PASS $DB_NAME <<EOF
+SET FOREIGN_KEY_CHECKS=0;
+SET UNIQUE_CHECKS=0;
+SET AUTOCOMMIT=0;
+EOF
+
+echo "[INFO] Восстанавливаем дамп..."
+gunzip -c $DUMP_FILE | \
+mysql -h127.0.0.1 -P3306 -uroot -p$DB_ROOT_PASS $DB_NAME
+
+echo "[INFO] Включаем проверки обратно..."
+mysql -h127.0.0.1 -P3306 -uroot -p$DB_ROOT_PASS $DB_NAME <<EOF
+SET FOREIGN_KEY_CHECKS=1;
+SET UNIQUE_CHECKS=1;
+COMMIT;
+EOF
+
+echo "[INFO] Восстановление завершено!"
