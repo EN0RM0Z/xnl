@@ -1,0 +1,155 @@
+1) Посмотреть текущее значение max_connections
+# подставь имя контейнера, если у тебя не 'mariadb'
+docker exec -i mariadb mysql -uroot -p'ТВОЙ_ROOT_PASSWORD' -e "SHOW VARIABLES LIKE 'max_connections';"
+
+
+В выводе увидишь текущее значение.
+
+2) Временно (моментально) изменить значение (без перезапуска)
+
+Это изменение действует до перезапуска сервера (после рестарта вернётся старое значение, если не записано в конфиг).
+
+docker exec -i mariadb mysql -uroot -p'ТВОЙ_ROOT_PASSWORD' -e "SET GLOBAL max_connections = 2000;"
+# Проверить
+docker exec -i mariadb mysql -uroot -p'ТВОЙ_ROOT_PASSWORD' -e "SHOW VARIABLES LIKE 'max_connections';"
+
+
+Если SET GLOBAL отработал — значение изменилось и действует сразу.
+
+Полезно: если ты хочешь, чтобы это изменение было постоянным — смотри раздел про custom.cnf.
+
+3) Проверить open_files_limit и предположительную нагрузку на память
+
+Перед увеличением max_connections проверь open_files_limit и примерную память на соединения:
+
+docker exec -i mariadb mysql -uroot -p'ТВОЙ_ROOT_PASSWORD' -e "SHOW VARIABLES LIKE 'open_files_limit';"
+
+Пример оценки памяти
+
+Каждое соединение потребляет некоторое количество памяти (пулы/буферы). Упрощённая формула:
+
+estimated_ram = max_connections * per_connection_buffers
+
+
+per_connection_buffers может варьироваться от ~100 KB до >1 MB в зависимости от настроек (sort_buffer_size, join_buffer_size, net_buffer_length и т.д.).
+Например, при 2000 conn × 500 KB ≈ 1 GB. При 10000 × 1 MB ≈ 10 GB.
+Поэтому не ставь 10000 сразу без расчёта и теста.
+
+4) Сделать изменение постоянным: custom.cnf (на хосте) и подключить к контейнеру
+
+Есть два способа:
+
+Вариант A — без пересоздания контейнера данных (рекомендуемый):
+
+создать custom.cnf на хосте → docker cp в контейнер → перезапустить контейнер (docker restart).
+Это не удаляет данные в томе /var/lib/mysql — это всего лишь рестарт.
+
+Шаги:
+
+Создай файл на хосте, например /tmp/99-custom.cnf:
+
+cat > /tmp/99-custom.cnf <<'EOF'
+[mysqld]
+# Пример: ставим max_connections и поднимаем open_files_limit
+max_connections = 2000
+open_files_limit = 65535
+# Другие параметры при необходимости:
+# table_open_cache = 4000
+# innodb_buffer_pool_size = 2G
+EOF
+
+
+Скопируй файл в контейнер (в официальных образах MariaDB конфиги читаются из /etc/mysql/conf.d/ и/или /etc/mysql/mariadb.conf.d/ — проверим оба):
+
+# Скопировать файл
+docker cp /tmp/99-custom.cnf mariadb:/etc/mysql/conf.d/99-custom.cnf
+
+# Убедиться, что файл там
+docker exec -i mariadb ls -l /etc/mysql/conf.d/99-custom.cnf
+# или
+docker exec -i mariadb ls -l /etc/mysql/mariadb.conf.d/99-custom.cnf
+
+
+Перезапусти сервер MariaDB (контейнер):
+
+docker restart mariadb
+
+
+Подтверди новую конфигурацию:
+
+docker exec -i mariadb mysql -uroot -p'ТВОЙ_ROOT_PASSWORD' -e "SHOW VARIABLES LIKE 'max_connections';"
+docker exec -i mariadb mysql -uroot -p'ТВОЙ_ROOT_PASSWORD' -e "SHOW VARIABLES LIKE 'open_files_limit';"
+
+
+Этот способ меняет конфиг внутри контейнера и применяет его после restart. Данные в /var/lib/mysql НЕ трогаются.
+
+Вариант B — хранить custom.cnf на хосте и монтировать (bind-mount)
+
+Если хочешь иметь конфиг на хосте и чтобы он был автоматически виден контейнеру без копирования, можно при запуске контейнера добавить -v /host/path/99-custom.cnf:/etc/mysql/conf.d/99-custom.cnf:Z (на SELinux). Но это требует пересоздания контейнера (чтобы изменить docker run -v).
+Если у тебя свежий запуск или ты готов создать новый контейнер, можно так. Если нет — используй docker cp + docker restart.
+
+Пример при запуске:
+
+docker run -d --name mariadb \
+  -v /var/keycloak_data:/var/lib/mysql \
+  -v /etc/my-mariadb.d/99-custom.cnf:/etc/mysql/conf.d/99-custom.cnf:Z \
+  -e MYSQL_ROOT_PASSWORD=... mariadb:10.5
+
+5) Альтернативный способ записать файл внутрь контейнера (через docker exec + tee)
+
+Если docker cp неудобен:
+
+# записать прямо в контейнер
+cat /tmp/99-custom.cnf | docker exec -i mariadb tee /etc/mysql/conf.d/99-custom.cnf >/dev/null
+
+# затем перезапуск
+docker restart mariadb
+
+6) Проверки и отладка после перезапуска
+
+Проверить, что mysqld поднялся, и посмотреть логи:
+
+docker logs -f mariadb | sed -n '1,200p'
+# или после перезапуска
+docker exec -i mariadb mysql -uroot -p'ТВОЙ_ROOT_PASSWORD' -e "SHOW VARIABLES LIKE 'max_connections';"
+
+
+Если MariaDB не стартует после записи конфига — проверь синтаксис файла и логи (docker logs mariadb). Ошибки конфигурации остановят запуск.
+
+7) Советы по значениям и безопасности
+
+Оценяй память: прежде чем ставить max_connections = 10000 — прикинь доступную RAM и per-connection буферы.
+
+open_files_limit нужно поднимать вместе с ростом max_connections.
+
+Тестируй на staging прежде чем менять на production.
+
+Бэкап конфигурации и данных перед изменениями (особенно если меняешь и другие параметры).
+
+Краткая шпаргалка (команды, которые можно скопировать)
+# посмотреть текущее
+docker exec -i mariadb mysql -uroot -p'ROOTPASS' -e "SHOW VARIABLES LIKE 'max_connections';"
+
+# временно установить (без рестарта)
+docker exec -i mariadb mysql -uroot -p'ROOTPASS' -e "SET GLOBAL max_connections = 2000;"
+
+# проверить open_files_limit
+docker exec -i mariadb mysql -uroot -p'ROOTPASS' -e "SHOW VARIABLES LIKE 'open_files_limit';"
+
+# создать custom на хосте
+cat > /tmp/99-custom.cnf <<'EOF'
+[mysqld]
+max_connections = 2000
+open_files_limit = 65535
+EOF
+
+# скопировать в контейнер
+docker cp /tmp/99-custom.cnf mariadb:/etc/mysql/conf.d/99-custom.cnf
+
+# перезапустить docker-контейнер (данные НЕ трогаем)
+docker restart mariadb
+
+# проверить применилось ли
+docker exec -i mariadb mysql -uroot -p'ROOTPASS' -e "SHOW VARIABLES LIKE 'max_connections';"
+
+
