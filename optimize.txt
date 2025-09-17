@@ -1,0 +1,4 @@
+docker exec -i mariadb \
+  mysql -u keycloak -pkeycloak keycloak \
+  -e "SELECT table_name, ROUND((data_length+index_length)/1024/1024,2) AS Size_MB FROM information_schema.tables WHERE table_schema='keycloak' ORDER BY Size_MB DESC LIMIT 10;"
+
