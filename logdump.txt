@@ -1,0 +1,46 @@
+#!/bin/bash
+set -euo pipefail
+
+# === Настройки ===
+ROOT_PASSWORD="Passw@124"
+KEYCLOAK_DB="keycloak"
+MARIADB_CONTAINER="mariadb"
+BACKUP_DIR="/var/backups"
+DATE=$(date +"%Y%m%d_%H%M%S")
+DUMP_FILE="$BACKUP_DIR/keycloak_${DATE}.sql.gz"
+LOG_FILE="$BACKUP_DIR/backup_restore.log"
+
+# === Функция логирования ===
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+# === 1. Создание дампа ===
+log "Начинаю создание дампа базы $KEYCLOAK_DB..."
+docker exec "$MARIADB_CONTAINER" \
+  sh -c "mysqldump \
+    --single-transaction \
+    --quick \
+    --routines \
+    --triggers \
+    --events \
+    -uroot -p$ROOT_PASSWORD $KEYCLOAK_DB" \
+  2>&1 | gzip > "$DUMP_FILE" \
+  || { log "❌ Ошибка при создании дампа"; exit 1; }
+log "✅ Дамп сохранен: $DUMP_FILE"
+
+# === 2. Восстановление из дампа ===
+log "Начинаю восстановление из дампа..."
+gunzip -c "$DUMP_FILE" \
+  | docker exec -i "$MARIADB_CONTAINER" \
+      sh -c "mysql -uroot -p$ROOT_PASSWORD $KEYCLOAK_DB" \
+  2>&1 | tee -a "$LOG_FILE" \
+  || { log "❌ Ошибка при восстановлении"; exit 1; }
+log "✅ Восстановление завершено"
+
+# === 3. Проверка результата ===
+log "Проверка наличия базы и таблиц..."
+docker exec "$MARIADB_CONTAINER" \
+  mysql -uroot -p$ROOT_PASSWORD -e "SHOW TABLES FROM $KEYCLOAK_DB;" \
+  2>&1 | tee -a "$LOG_FILE"
+log "✅ Скрипт успешно завершен"
