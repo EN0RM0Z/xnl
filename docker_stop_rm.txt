@@ -1,0 +1,13 @@
+#!/bin/bash
+
+LOG="$1"   # первый аргумент — путь к лог-файлу
+
+if [ -n "$LOG" ]; then
+    # если аргумент передан — пишем и в лог, и на экран
+    echo "==== $(date '+%F %T') ====" | tee -a "$LOG"
+    docker ps -a -q | xargs -r docker rm 2>&1 | tee -a "$LOG"
+else
+    # если аргумента нет — вывод только на экран
+    echo "==== $(date '+%F %T') ===="
+    docker ps -a -q | xargs -r docker rm
+fi
