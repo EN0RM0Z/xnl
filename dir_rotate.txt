@@ -1,0 +1,27 @@
+#!/bin/bash
+set -euo pipefail
+
+# Максимальное количество версий (глубина ротации)
+MAX_BACKUPS=7
+
+TARGET_DIR="/var/backups/mydata"
+
+# 1. Удаляем самый старый каталог (TARGET_DIR.$MAX_BACKUPS)
+if [ -d "${TARGET_DIR}.${MAX_BACKUPS}" ]; then
+    rm -rf "${TARGET_DIR}.${MAX_BACKUPS}"
+fi
+
+# 2. Сдвигаем все каталоги от N-1 к N (в обратном порядке, чтобы не перезаписать)
+for (( i=MAX_BACKUPS-1; i>=1; i-- )); do
+    if [ -d "${TARGET_DIR}.${i}" ]; then
+        mv "${TARGET_DIR}.${i}" "${TARGET_DIR}.$((i+1))"
+    fi
+done
+
+# 3. Переименовываем основной каталог в .1
+if [ -d "$TARGET_DIR" ]; then
+    mv "$TARGET_DIR" "${TARGET_DIR}.1"
+fi
+
+# Теперь $TARGET_DIR свободен под новый бэкап
+mkdir -p "$TARGET_DIR"
