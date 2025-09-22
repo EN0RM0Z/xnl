@@ -2,7 +2,7 @@
 
 # =====================================================
 # Скрипт: анализ размеров таблиц Keycloak
-# CSV готов для Excel, архивирование и отчеты
+# Упрощенная версия
 # =====================================================
 
 # === Настройки ===
@@ -41,13 +41,7 @@ ORDER BY data_length DESC;"
 
 docker exec -i "$MARIADB_CONTAINER" \
   mysql -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -N -B -e "$SQL_QUERY" \
-  | awk -F'\t' -v OFS="$CSV_DELIMITER" -v DEC="$DECIMAL_SEPARATOR" '{
-        for(i=1;i<=NF;i++){
-            if($i=="NULL") $i=""
-            gsub(/\./, DEC, $i)
-            printf "\"%s\"%s", $i, (i==NF?RS:OFS)
-        }
-    }' > "$CURRENT_FILE"
+  | tr '\t' "$CSV_DELIMITER" > "$CURRENT_FILE"
 
 # =====================================================
 # 2. Архивируем текущий снимок
@@ -59,44 +53,41 @@ echo "[INFO] Архив сохранен: $ARCHIVE_FILE" | tee -a "$LOG_FILE"
 # 3. Формируем отчет с разницей
 # =====================================================
 if [[ -f "$PREVIOUS_FILE" ]]; then
-    {
-      echo "\"Table\"${CSV_DELIMITER}\"Previous (MB)\"${CSV_DELIMITER}\"Current (MB)\"${CSV_DELIMITER}\"Change (MB)\""
-
-      # join по имени таблицы, потом сортировка по Current (MB) численно
-      join -t"$CSV_DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
-      | while IFS="$CSV_DELIMITER" read -r tbl prev cur; do
-          # Убираем кавычки для вычислений и заменяем DECIMAL_SEPARATOR на точку
-          prev_num=$(echo "$prev" | tr -d '"' | tr "$DECIMAL_SEPARATOR" '.')
-          cur_num=$(echo "$cur" | tr -d '"' | tr "$DECIMAL_SEPARATOR" '.')
-          diff=$(echo "$cur_num - $prev_num" | bc)
-
-          # Подготавливаем значения для CSV (с кавычками и DECIMAL_SEPARATOR)
-          prev_csv=$(echo "$prev_num" | sed "s/\./$DECIMAL_SEPARATOR/")
-          cur_csv=$(echo "$cur_num" | sed "s/\./$DECIMAL_SEPARATOR/")
-          diff_csv=$(echo "$diff" | sed "s/\./$DECIMAL_SEPARATOR/")
-          printf "\"%s\"%s\"%s\"%s\"%s\"%s\"%s\"\n" \
-                 "$tbl" "$CSV_DELIMITER" "$prev_csv" "$CSV_DELIMITER" "$cur_csv" "$CSV_DELIMITER" "$diff_csv"
-      done
-    } > temp_report.csv
-
-    # Сортировка по столбцу "Current (MB)" (3-й столбец) в порядке убывания
-    head -n1 temp_report.csv > "$REPORT_FILE"
-    tail -n+2 temp_report.csv | sort -t"$CSV_DELIMITER" -k3,3nr >> "$REPORT_FILE"
-    rm -f temp_report.csv
+    # Создаем заголовок отчета
+    echo "Table${CSV_DELIMITER}Previous (MB)${CSV_DELIMITER}Current (MB)${CSV_DELIMITER}Change (MB)" > "$REPORT_FILE"
+    
+    # Объединяем данные и вычисляем разницу
+    join -t"$CSV_DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
+    | while IFS="$CSV_DELIMITER" read -r tbl prev cur; do
+        # Вычисляем разницу
+        diff=$(echo "$cur - $prev" | bc)
+        # Форматируем строку
+        echo "${tbl}${CSV_DELIMITER}${prev}${CSV_DELIMITER}${cur}${CSV_DELIMITER}${diff}"
+    done | sort -t"$CSV_DELIMITER" -k3,3nr >> "$REPORT_FILE"  # Сортировка по текущему размеру (столбец 3)
 
     echo "[INFO] Отчет сохранён: $REPORT_FILE" | tee -a "$LOG_FILE"
 else
-    echo "\"First snapshot, no comparison\"" > "$REPORT_FILE"
+    echo "First snapshot, no comparison" > "$REPORT_FILE"
     echo "[INFO] Нет предыдущего снимка, формируем первый отчет" | tee -a "$LOG_FILE"
 fi
 
 # =====================================================
-# 4. Подготовка к следующему запуску
+# 4. Заменяем точку на запятую только в отчетах для Excel
+# =====================================================
+if [[ -f "$REPORT_FILE" ]]; then
+    sed -i "s/\./$DECIMAL_SEPARATOR/g" "$REPORT_FILE"
+fi
+if [[ -f "$ARCHIVE_FILE" ]]; then
+    sed -i "s/\./$DECIMAL_SEPARATOR/g" "$ARCHIVE_FILE"
+fi
+
+# =====================================================
+# 5. Подготовка к следующему запуску
 # =====================================================
 mv -f "$CURRENT_FILE" "$PREVIOUS_FILE"
 
 # =====================================================
-# 5. Удаление старых файлов
+# 6. Удаление старых файлов
 # =====================================================
 find "$ARC_DIR" -type f -mtime +"$MAX_DAY" -exec rm -f {} \;
 find "$REP_DIR" -type f -mtime +"$MAX_DAY" -exec rm -f {} \;
