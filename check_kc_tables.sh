@@ -65,11 +65,12 @@ echo "[INFO] Архив сохранен: $ARCHIVE_FILE" | tee -a "$LOG_FILE"
 
 # =====================================================
 # 4. Формируем CSV-отчет с изменениями по сравнению с предыдущим снимком
+#    Сортируем по размеру таблицы
 #    Десятичный разделитель заменяем на запятую
 # =====================================================
 if [[ -f "$PREVIOUS_FILE" ]]; then
     {
-      # Заголовок CSV
+      # Заголовок CSV (на английском)
       echo "\"Table\"${DELIMITER}\"Previous (MB)\"${DELIMITER}\"Current (MB)\"${DELIMITER}\"Change (MB)\""
 
       # Сравниваем предыдущий и текущий снимок
@@ -88,11 +89,11 @@ if [[ -f "$PREVIOUS_FILE" ]]; then
           printf "\"%s\"%s\"%s\"%s\"%s\"%s\"%s\"\n" \
                  "$tbl" "$DELIMITER" "$prev_val_excel" "$DELIMITER" "$cur_val_excel" "$DELIMITER" "$diff_excel"
       done
-    } > "$REPORT_FILE"
+    } | sort -t"$DELIMITER" -k3,3nr > "$REPORT_FILE"   # сортировка по Current size, убывание
     echo "[INFO] Отчет сохранён: $REPORT_FILE" | tee -a "$LOG_FILE"
 else
     # Первый запуск, сравнения нет
-    echo "\"Первый замер, сравнения нет\"" > "$REPORT_FILE"
+    echo "\"First snapshot, no comparison\"" > "$REPORT_FILE"
     echo "[INFO] Нет предыдущего снимка, формируем первый отчет" | tee -a "$LOG_FILE"
 fi
 
