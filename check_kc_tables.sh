@@ -17,7 +17,8 @@ DB_NAME="keycloak"
 DB_USER="root"
 DB_PASSWORD="RootPass"
 
-DELIMITER=";"              # разделитель для CSV
+CSV_DELIMITER=";"          # CSV разделитель колонок
+DECIMAL_SEPARATOR=","      # десятичный разделитель для Excel
 
 # Создаем необходимые папки
 mkdir -p "$BASE_DIR" "$ARC_DIR" "$REP_DIR"
@@ -46,12 +47,15 @@ ORDER BY data_length DESC;"
 #    Формируем CSV с:
 #    - кавычками вокруг каждого значения
 #    - заменой NULL на пустое значение
+#    - заменой десятичного разделителя
 # =====================================================
 docker exec -i "$MARIADB_CONTAINER" \
   mysql -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -N -B -e "$SQL_QUERY" \
-  | awk -F'\t' -v OFS="$DELIMITER" '{
+  | awk -F'\t' -v OFS="$CSV_DELIMITER" -v DEC="$DECIMAL_SEPARATOR" '{
         for(i=1;i<=NF;i++){
             if($i=="NULL") $i=""
+            # заменяем точку на DECIMAL_SEPARATOR
+            gsub(/\./, DEC, $i)
             printf "\"%s\"%s", $i, (i==NF?RS:OFS)
         }
     }' \
@@ -65,31 +69,29 @@ echo "[INFO] Архив сохранен: $ARCHIVE_FILE" | tee -a "$LOG_FILE"
 
 # =====================================================
 # 4. Формируем CSV-отчет с изменениями по сравнению с предыдущим снимком
-#    Сортируем по размеру таблицы
-#    Десятичный разделитель заменяем на запятую
+#    Сортируем по Current (MB) размеру, убывание
 # =====================================================
 if [[ -f "$PREVIOUS_FILE" ]]; then
     {
       # Заголовок CSV (на английском)
-      echo "\"Table\"${DELIMITER}\"Previous (MB)\"${DELIMITER}\"Current (MB)\"${DELIMITER}\"Change (MB)\""
+      echo "\"Table\"${CSV_DELIMITER}\"Previous (MB)\"${CSV_DELIMITER}\"Current (MB)\"${CSV_DELIMITER}\"Change (MB)\""
 
       # Сравниваем предыдущий и текущий снимок
-      join -t"$DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
-      | while IFS="$DELIMITER" read -r tbl prev cur; do
-          # Убираем кавычки вокруг чисел для вычислений
+      join -t"$CSV_DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
+      | while IFS="$CSV_DELIMITER" read -r tbl prev cur; do
+          # убираем кавычки вокруг чисел
           prev_val=$(echo "$prev" | tr -d '"')
           cur_val=$(echo "$cur" | tr -d '"')
-          # Вычисляем разницу
+          # вычисляем разницу
           diff=$(echo "$cur_val - $prev_val" | bc)
-          # Заменяем точку на запятую для Excel
-          prev_val_excel=$(echo "$prev_val" | sed 's/\./,/')
-          cur_val_excel=$(echo "$cur_val" | sed 's/\./,/')
-          diff_excel=$(echo "$diff" | sed 's/\./,/')
-          # Выводим строку CSV
+          # формируем значения для CSV с десятичным разделителем
+          prev_val_csv=$(echo "$prev_val" | sed "s/\./$DECIMAL_SEPARATOR/")
+          cur_val_csv=$(echo "$cur_val" | sed "s/\./$DECIMAL_SEPARATOR/")
+          diff_csv=$(echo "$diff" | sed "s/\./$DECIMAL_SEPARATOR/")
           printf "\"%s\"%s\"%s\"%s\"%s\"%s\"%s\"\n" \
-                 "$tbl" "$DELIMITER" "$prev_val_excel" "$DELIMITER" "$cur_val_excel" "$DELIMITER" "$diff_excel"
+                 "$tbl" "$CSV_DELIMITER" "$prev_val_csv" "$CSV_DELIMITER" "$cur_val_csv" "$CSV_DELIMITER" "$diff_csv"
       done
-    } | sort -t"$DELIMITER" -k3,3nr > "$REPORT_FILE"   # сортировка по Current size, убывание
+    } | sort -t"$CSV_DELIMITER" -k3,3nr > "$REPORT_FILE"   # сортировка по Current (MB), убывание
     echo "[INFO] Отчет сохранён: $REPORT_FILE" | tee -a "$LOG_FILE"
 else
     # Первый запуск, сравнения нет
