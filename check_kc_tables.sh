@@ -43,16 +43,18 @@ ORDER BY data_length DESC;"
 
 # =====================================================
 # 2. Выполнение запроса в контейнере MariaDB
-#    Подготавливаем CSV для Excel:
-#    - Заменяем табы на DELIMITER
-#    - NULL заменяем на пустое значение
-#    - Оборачиваем каждое значение в кавычки
+#    Формируем CSV с:
+#    - кавычками вокруг каждого значения
+#    - заменой NULL на пустое значение
 # =====================================================
 docker exec -i "$MARIADB_CONTAINER" \
   mysql -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -N -B -e "$SQL_QUERY" \
-  | sed "s/\t/${DELIMITER}/g" \
-  | sed 's/NULL/""/g' \
-  | sed 's/^/"/; s/$/"/' \
+  | awk -F'\t' -v OFS="$DELIMITER" '{
+        for(i=1;i<=NF;i++){
+            if($i=="NULL") $i=""
+            printf "\"%s\"%s", $i, (i==NF?RS:OFS)
+        }
+    }' \
   > "$CURRENT_FILE"
 
 # =====================================================
@@ -63,6 +65,7 @@ echo "[INFO] Архив сохранен: $ARCHIVE_FILE" | tee -a "$LOG_FILE"
 
 # =====================================================
 # 4. Формируем CSV-отчет с изменениями по сравнению с предыдущим снимком
+#    Десятичный разделитель заменяем на запятую
 # =====================================================
 if [[ -f "$PREVIOUS_FILE" ]]; then
     {
@@ -70,16 +73,20 @@ if [[ -f "$PREVIOUS_FILE" ]]; then
       echo "\"Таблица\"${DELIMITER}\"Было (МБ)\"${DELIMITER}\"Стало (МБ)\"${DELIMITER}\"Изменение (МБ)\""
 
       # Сравниваем предыдущий и текущий снимок
-      join -t"$DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 \
-           <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
+      join -t"$DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
       | while IFS="$DELIMITER" read -r tbl prev cur; do
           # Убираем кавычки вокруг чисел для вычислений
           prev_val=$(echo "$prev" | tr -d '"')
           cur_val=$(echo "$cur" | tr -d '"')
+          # Вычисляем разницу
           diff=$(echo "$cur_val - $prev_val" | bc)
-          # Выводим строку CSV с кавычками и DELIMITER
-          printf "\"%s\"${DELIMITER}\"%s\"${DELIMITER}\"%s\"${DELIMITER}\"%+s\"\n" \
-                 "$tbl" "$prev_val" "$cur_val" "$diff"
+          # Заменяем точку на запятую для Excel
+          prev_val_excel=$(echo "$prev_val" | sed 's/\./,/')
+          cur_val_excel=$(echo "$cur_val" | sed 's/\./,/')
+          diff_excel=$(echo "$diff" | sed 's/\./,/')
+          # Выводим строку CSV
+          printf "\"%s\"%s\"%s\"%s\"%s\"%s\"%s\"\n" \
+                 "$tbl" "$DELIMITER" "$prev_val_excel" "$DELIMITER" "$cur_val_excel" "$DELIMITER" "$diff_excel"
       done
     } > "$REPORT_FILE"
     echo "[INFO] Отчет сохранён: $REPORT_FILE" | tee -a "$LOG_FILE"
@@ -102,3 +109,4 @@ find "$REP_DIR" -type f -mtime +"$MAX_DAY" -exec rm -f {} \;
 
 echo "[INFO] Старые файлы (старше $MAX_DAY дней) удалены" | tee -a "$LOG_FILE"
 echo "[INFO] --- Завершено ---" | tee -a "$LOG_FILE"
+
