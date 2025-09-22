@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =====================================================
-# Скрипт для анализа размеров таблиц Keycloak
-# Формирует CSV-отчет для Excel
+# Скрипт: анализ размеров таблиц Keycloak
+# Формирует CSV-отчет для Excel с архивированием и отчетами
 # =====================================================
 
 # === Настройки ===
@@ -19,11 +19,12 @@ DB_PASSWORD="RootPass"
 
 DELIMITER=";"              # разделитель для CSV
 
+# Создаем необходимые папки
 mkdir -p "$BASE_DIR" "$ARC_DIR" "$REP_DIR"
 
 DATE=$(date +%Y%m%d_%H%M%S)
 
-# Файлы текущего и предыдущего снимка
+# === Файлы текущего и предыдущего снимка ===
 CURRENT_FILE="$BASE_DIR/current.csv"
 PREVIOUS_FILE="$BASE_DIR/previous.csv"
 ARCHIVE_FILE="$ARC_DIR/current_$DATE.csv"
@@ -42,36 +43,45 @@ ORDER BY data_length DESC;"
 
 # =====================================================
 # 2. Выполнение запроса в контейнере MariaDB
-#    - -N убирает заголовки
-#    - -B форматирует вывод в табличный формат
+#    -N убирает заголовки
+#    -B выводит табличный формат (для замены табов на DELIMITER)
 # =====================================================
+# Комментарии выше каждой команды для ясности
 docker exec -i "$MARIADB_CONTAINER" \
   mysql -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -N -B -e "$SQL_QUERY" \
-  | sed "s/\t/${DELIMITER}/g" \             # Заменяем таб на разделитель ;
-  | sed 's/NULL/""/g' \                     # Заменяем NULL на пустое значение
-  | sed 's/^/"/; s/$/"/' > "$CURRENT_FILE"  # Оборачиваем каждое значение в кавычки
+  | sed "s/\t/${DELIMITER}/g" \    # Заменяем табы на разделитель ;
+  | sed 's/NULL/""/g' \            # Заменяем NULL на пустое значение
+  | sed 's/^/"/; s/$/"/'           # Оборачиваем каждое значение в кавычки
+  > "$CURRENT_FILE"
 
-# 3. Сохраняем копию в архив
+# 3. Архивируем текущий снимок
 cp "$CURRENT_FILE" "$ARCHIVE_FILE"
-echo "[INFO] Архив размеров таблиц: $ARCHIVE_FILE" | tee -a "$LOG_FILE"
+echo "[INFO] Архив сохранен: $ARCHIVE_FILE" | tee -a "$LOG_FILE"
 
 # =====================================================
 # 4. Формируем CSV-отчет с изменениями по сравнению с предыдущим снимком
 # =====================================================
 if [[ -f "$PREVIOUS_FILE" ]]; then
     {
+      # Заголовок CSV
       echo "\"Таблица\"${DELIMITER}\"Было (МБ)\"${DELIMITER}\"Стало (МБ)\"${DELIMITER}\"Изменение (МБ)\""
-      join -t"$DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
+
+      # Сравниваем предыдущий и текущий снимок
+      join -t"$DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 \
+           <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
       | while IFS="$DELIMITER" read -r tbl prev cur; do
           # Убираем кавычки вокруг чисел для вычислений
           prev_val=$(echo "$prev" | tr -d '"')
           cur_val=$(echo "$cur" | tr -d '"')
           diff=$(echo "$cur_val - $prev_val" | bc)
-          printf "\"%s\"${DELIMITER}\"%s\"${DELIMITER}\"%s\"${DELIMITER}\"%+s\"\n" "$tbl" "$prev_val" "$cur_val" "$diff"
+          # Выводим строку CSV с кавычками и DELIMITER
+          printf "\"%s\"${DELIMITER}\"%s\"${DELIMITER}\"%s\"${DELIMITER}\"%+s\"\n" \
+                 "$tbl" "$prev_val" "$cur_val" "$diff"
       done
     } > "$REPORT_FILE"
     echo "[INFO] Отчет сохранён: $REPORT_FILE" | tee -a "$LOG_FILE"
 else
+    # Первый запуск, сравнения нет
     echo "\"Первый замер, сравнения нет\"" > "$REPORT_FILE"
     echo "[INFO] Нет предыдущего снимка, формируем первый отчет" | tee -a "$LOG_FILE"
 fi
