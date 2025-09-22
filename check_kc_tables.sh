@@ -77,8 +77,12 @@ if [[ -f "$PREVIOUS_FILE" ]]; then
           printf "\"%s\"%s\"%s\"%s\"%s\"%s\"%s\"\n" \
                  "$tbl" "$CSV_DELIMITER" "$prev_csv" "$CSV_DELIMITER" "$cur_csv" "$CSV_DELIMITER" "$diff_csv"
       done
-    } | sed '1!s/^"\(.*\)"/\1/' \  # Убираем лишние кавычки в начале строк кроме заголовка
-    | awk -F"$CSV_DELIMITER" 'NR==1{print $0; next} {print $0 | "sort -t\";\" -k3,3nr"}' > "$REPORT_FILE"
+    } > temp_report.csv
+
+    # Сортировка по столбцу "Current (MB)" (3-й столбец) в порядке убывания
+    head -n1 temp_report.csv > "$REPORT_FILE"
+    tail -n+2 temp_report.csv | sort -t"$CSV_DELIMITER" -k3,3nr >> "$REPORT_FILE"
+    rm -f temp_report.csv
 
     echo "[INFO] Отчет сохранён: $REPORT_FILE" | tee -a "$LOG_FILE"
 else
@@ -99,4 +103,3 @@ find "$REP_DIR" -type f -mtime +"$MAX_DAY" -exec rm -f {} \;
 
 echo "[INFO] Старые файлы (старше $MAX_DAY дней) удалены" | tee -a "$LOG_FILE"
 echo "[INFO] --- Завершено ---" | tee -a "$LOG_FILE"
-
