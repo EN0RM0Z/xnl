@@ -70,7 +70,7 @@ echo "[INFO] Архив сохранен: $ARCHIVE_FILE" | tee -a "$LOG_FILE"
 if [[ -f "$PREVIOUS_FILE" ]]; then
     {
       # Заголовок CSV
-      echo "\"Таблица\"${DELIMITER}\"Было (МБ)\"${DELIMITER}\"Стало (МБ)\"${DELIMITER}\"Изменение (МБ)\""
+      echo "\"Table\"${DELIMITER}\"Previous (MB)\"${DELIMITER}\"Current (MB)\"${DELIMITER}\"Change (MB)\""
 
       # Сравниваем предыдущий и текущий снимок
       join -t"$DELIMITER" -a1 -a2 -e0 -o 0,1.2,2.2 <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") \
