@@ -17,48 +17,47 @@ mkdir -p "$BASE_DIR" "$ARC_DIR" "$REP_DIR"
 
 DATE=$(date +%Y%m%d_%H%M%S)
 
-CUR_FILE="$BASE_DIR/current.csv"
-PREV_FILE="$BASE_DIR/previous.csv"
+CURRENT_FILE="$BASE_DIR/current.csv"
+PREVIOUS_FILE="$BASE_DIR/previous.csv"
 ARCHIVE_FILE="$ARC_DIR/current_$DATE.csv"
 REPORT_FILE="$REP_DIR/report_$DATE.txt"
 
-echo "[INFO] --- Запуск проверки: $DATE ---" | tee -a "$LOG_FILE"
+echo "[INFO] --- Запуск проверки таблиц: $DATE ---" | tee -a "$LOG_FILE"
 
-# === Снимаем текущий размер таблиц ===
+# 1. Получаем размеры таблиц (сразу сортируем по размеру)
 docker exec -i "$CONTAINER" \
   mysql -u"$USER" -p"$PASS" -N -e "
-    SELECT table_name,
-           ROUND((data_length+index_length)/1024/1024,2) AS size_mb
+    SELECT table_name, ROUND(data_length/1024/1024,2) AS data_mb
     FROM information_schema.tables
     WHERE table_schema='$DB'
-    ORDER BY table_name;" > "$CUR_FILE"
+    ORDER BY data_length DESC;" > "$CURRENT_FILE"
 
-# === Архивируем копию current.csv ===
-cp "$CUR_FILE" "$ARCHIVE_FILE"
+# 2. Сохраняем копию в архив
+cp "$CURRENT_FILE" "$ARCHIVE_FILE"
 echo "[INFO] Архивная копия сохранена: $ARCHIVE_FILE" | tee -a "$LOG_FILE"
 
-# === Сравнение с предыдущим снимком ===
-if [[ -f "$PREV_FILE" ]]; then
+# 3. Формируем отчет
+if [[ -f "$PREVIOUS_FILE" ]]; then
     {
-      echo "Отчет по изменениям размеров таблиц ($DB):"
-      echo "Таблица; Было (МБ); Стало (МБ); Изменение (МБ)"
-      echo "--------------------------------------------------------"
-      join -t $'\t' -a1 -a2 -e0 -o 0,1.2,2.2 "$PREV_FILE" "$CUR_FILE" | \
-      while IFS=$'\t' read -r table prev cur; do
+      echo "Отчет об изменении размеров таблиц (MB)"
+      echo "Таблица; Было; Стало; Изменение"
+      echo "-------------------------------------------"
+      join -t $'\t' -a1 -a2 -e0 -o 0,1.2,2.2 \
+           <(sort "$PREVIOUS_FILE") <(sort "$CURRENT_FILE") | \
+      while IFS=$'\t' read -r tbl prev cur; do
           diff=$(echo "$cur - $prev" | bc)
-          printf "%s; %s; %s; %+s\n" "$table" "$prev" "$cur" "$diff"
-      done
+          printf "%s; %s; %s; %+s\n" "$tbl" "$prev" "$cur" "$diff"
+      done | sort -t';' -k3 -nr
     } > "$REPORT_FILE"
     echo "[INFO] Отчет сохранён: $REPORT_FILE" | tee -a "$LOG_FILE"
 else
-    echo "[INFO] Нет предыдущего снимка, сохраняю первый замер." | tee -a "$LOG_FILE"
-    echo "Первый снимок, отчет не формировался" > "$REPORT_FILE"
+    echo "Первый запуск, сравнения нет" > "$REPORT_FILE"
 fi
 
-# === Подготовка к следующему запуску ===
-mv -f "$CUR_FILE" "$PREV_FILE"
+# 4. Подготовка к следующему запуску
+mv -f "$CURRENT_FILE" "$PREVIOUS_FILE"
 
-# === Удаление старых файлов ===
+# 5. Удаление старых архивов и отчетов
 find "$ARC_DIR" -type f -mtime +"$MAX_DAY" -exec rm -f {} \;
 find "$REP_DIR" -type f -mtime +"$MAX_DAY" -exec rm -f {} \;
 
