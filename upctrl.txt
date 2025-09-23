@@ -1,0 +1,29 @@
+#!/bin/bash
+
+URL="https://example.com"
+MAX_WAIT=60      # максимально допустимое время ожидания (в секундах)
+INTERVAL=5       # пауза между проверками (в секундах)
+
+START_TIME=$(date +%s)
+
+while true; do
+    STATUS=$(curl --head -k --location --connect-timeout 5 --write-out %{http_code} --silent --output /dev/null "${URL}")
+    echo "Статус ответа: $STATUS"
+
+    if [[ "$STATUS" == "200" ]]; then
+        echo "Страница доступна!"
+        break
+    fi
+
+    CURRENT_TIME=$(date +%s)
+    ELAPSED=$(( CURRENT_TIME - START_TIME ))
+
+    echo "Прошло $ELAPSED секунд, страница пока недоступна"
+
+    if (( ELAPSED >= MAX_WAIT )); then
+        echo "Превышено максимальное время ожидания: $MAX_WAIT секунд"
+        break
+    fi
+
+    sleep $INTERVAL
+done
