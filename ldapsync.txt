@@ -32,7 +32,7 @@ log() {
 }
 
 # -------------------------------
-# Получение токена доступа для Admin API
+# Получение токена доступа для Admin API (с подробным выводом)
 # -------------------------------
 get_token() {
     local BASE_URL=$1       # базовый URL Keycloak
@@ -40,22 +40,42 @@ get_token() {
     local CLIENT_ID=$3
     local CLIENT_SECRET=$4
 
-    echo "Получаем токен для realm '$REALM_NAME'..."
-    TOKEN=$(curl -s -X POST "$BASE_URL/realms/$REALM_NAME/protocol/openid-connect/token" \
+    echo "----- Получение токена -----"
+    echo "BASE_URL   = $BASE_URL"
+    echo "REALM_NAME = $REALM_NAME"
+    echo "CLIENT_ID  = $CLIENT_ID"
+    echo "CLIENT_SECRET = $CLIENT_SECRET"
+    echo
+
+    local URL="$BASE_URL/realms/$REALM_NAME/protocol/openid-connect/token"
+    echo "Формируем запрос к URL:"
+    echo "$URL"
+    echo
+
+    echo "Выполняем curl..."
+    RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$URL" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "grant_type=client_credentials" \
         -d "client_id=$CLIENT_ID" \
-        -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
+        -d "client_secret=$CLIENT_SECRET")
+
+    echo "Полный ответ от сервера:"
+    echo "$RESPONSE"
+    echo "----------------------------"
+
+    # Достаём только токен
+    TOKEN=$(echo "$RESPONSE" | jq -r '.access_token' 2>/dev/null)
 
     if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
-        echo "Ошибка: не удалось получить токен для realm '$REALM_NAME' с client_id='$CLIENT_ID'"
+        echo "❌ Ошибка: токен не получен"
         return 1
     else
-        echo "Токен успешно получен"
+        echo "✅ Токен успешно получен"
     fi
 
     echo "$TOKEN"
 }
+
 
 # -------------------------------
 # Функция синхронизации LDAP для одного realm
