@@ -1,3 +1,42 @@
+1️⃣ Проверяем доступ к Admin API
+
+Если Keycloak в Docker, лучше сначала выполнить команду внутри контейнера, чтобы убедиться, что Admin API доступен:
+
+docker exec -it <keycloak_container_name> bash
+
+
+Внутри контейнера:
+
+curl -k -X GET -H "Authorization: Bearer <ACCESS_TOKEN>" "http://localhost:8080/auth/admin/realms/<REALM>/clients" -o clients.json
+
+
+<REALM> — точное имя realm.
+
+Если вернуло список клиентов → API доступен.
+
+Если внутри контейнера работает, но с Windows CMD 404 → проблема с пробросом портов или jboss.bind.address.
+
+2️⃣ Получаем UUID клиента
+
+В CMD (Windows) проще всего:
+
+curl -k -X GET ^
+  -H "Authorization: Bearer <ACCESS_TOKEN>" ^
+  "http://localhost:8080/auth/admin/realms/<REALM>/clients" ^
+  -o clients.json
+
+
+Открываем clients.json, ищем нужный clientId → берём поле id → это UUID.
+
+3️⃣ Меняем секрет клиента
+curl -k -X PUT ^
+  -H "Authorization: Bearer <ACCESS_TOKEN>" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"value\":\"my-fixed-secret\"}" ^
+  "http://localhost:8080/auth/admin/realms/<REALM>/clients/<CLIENT_UUID>/client-secret" ^
+  -o set-secret.json
+====================
+
 SELECT ID, CLIENT_ID, NAME
 FROM CLIENT
 WHERE CLIENT_ID='ldap-sync-client';
