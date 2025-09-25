@@ -1,14 +1,174 @@
-# ---------- Человекочитаемый вывод ----------
-    ADDED=$(echo "$RESPONSE" | jq -r '.added // 0')
-    UPDATED=$(echo "$RESPONSE" | jq -r '.updated // 0')
-    REMOVED=$(echo "$RESPONSE" | jq -r '.removed // 0')
-    FAILED=$(echo "$RESPONSE" | jq -r '.failed // 0')
-    STATUS=$(echo "$RESPONSE" | jq -r '.status // "нет данных"')
+#!/bin/bash
+#
+# Скрипт синхронизации LDAP пользователей в Keycloak 16
+# Поддерживает поиск LDAP-компонента через Components API
+# Использует config.json с массивом realms[]
+#
 
-    write_log "Результат синхронизации LDAP_ID $LDAP_ID в realm $REALM_NAME:"
-    write_log "  Добавлено новых пользователей: $ADDED"
-    write_log "  Обновлено пользователей:      $UPDATED"
-    write_log "  Удалено пользователей:       $REMOVED"
-    write_log "  Не удалось синхронизировать: $FAILED"
-    write_log "  Статус: $STATUS"
-    write_log "---------------------------------------------"
+CONFIG_FILE="config.json"
+LOG_FILE="/var/log/keycloak_ldap_sync.log"
+TOKEN=""  # глобальная переменная для токена
+
+# -------------------------------
+# Проверка аргумента и выбор типа синхронизации
+# -------------------------------
+case "$1" in
+    full)
+        SYNC_TYPE="triggerFullSync"
+        SYNC_NAME="полная"
+        ;;
+    changed)
+        SYNC_TYPE="triggerChangedUsersSync"
+        SYNC_NAME="только изменённые пользователи"
+        ;;
+    *)
+        echo "Использование: $0 <full|changed>"
+        exit 1
+        ;;
+esac
+
+# -------------------------------
+# Функция записи логов
+# -------------------------------
+write_log() {
+    local MSG=$1
+    local LEVEL=${2:-INFO}
+    echo "[$LEVEL] $MSG" | tee -a "$LOG_FILE"
+}
+
+# -------------------------------
+# Функция отправки запроса к Keycloak
+# -------------------------------
+invoke_keycloak_request() {
+    local URL=$1
+    local METHOD=${2:-GET}
+    local TOKEN=$3
+    local DATA=${4:-}
+
+    if [[ "$METHOD" == "GET" ]]; then
+        curl -s -H "Authorization: Bearer $TOKEN" "$URL"
+    else
+        curl -s -X "$METHOD" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$DATA" "$URL"
+    fi
+}
+
+# -------------------------------
+# Функция получения токена
+# -------------------------------
+get_token() {
+    local BASE_URL=$1
+    local REALM_NAME=$2
+    local CLIENT_ID=$3
+    local CLIENT_SECRET=$4
+
+    write_log "Получение токена для realm $REALM_NAME"
+
+    local URL="${BASE_URL%/}/realms/${REALM_NAME}/protocol/openid-connect/token"
+    RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$URL" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=$CLIENT_ID" \
+        -d "client_secret=$CLIENT_SECRET")
+
+    echo "$RESPONSE" | tee -a "$LOG_FILE"
+
+    local TMP_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token' 2>/dev/null)
+
+    if [[ -z "$TMP_TOKEN" || "$TMP_TOKEN" == "null" ]]; then
+        write_log "Ошибка: токен не получен для realm $REALM_NAME" "ERROR"
+        TOKEN=""
+        return 1
+    fi
+
+    TOKEN="$TMP_TOKEN"
+    write_log "Токен успешно получен для realm $REALM_NAME"
+    return 0
+}
+
+# -------------------------------
+# Функция синхронизации LDAP по Components API
+# -------------------------------
+sync_ldap_component() {
+    local BASE_URL=$1
+    local REALM_NAME=$2
+
+    write_log "Поиск LDAP компонентов в realm $REALM_NAME..."
+    COMPONENTS_RESPONSE=$(invoke_keycloak_request \
+        "${BASE_URL%/}/admin/realms/${REALM_NAME}/components?type=org.keycloak.storage.UserStorageProvider" \
+        "GET" \
+        "$TOKEN")
+
+    LDAP_IDS=$(echo "$COMPONENTS_RESPONSE" | jq -r '.[] | select(.providerId=="ldap") | .id')
+
+    if [[ -z "$LDAP_IDS" ]]; then
+        write_log "LDAP-провайдер не найден в realm $REALM_NAME" "WARNING"
+        return 0
+    fi
+
+    for LDAP_ID in $LDAP_IDS; do
+        write_log "Найден LDAP провайдер c ID: $LDAP_ID. Запускаем ${SYNC_NAME} синхронизацию..."
+
+        SYNC_URL="${BASE_URL%/}/admin/realms/${REALM_NAME}/user-storage/${LDAP_ID}/sync?action=${SYNC_TYPE}"
+
+        RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$SYNC_URL" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json")
+
+        write_log "Сырой ответ сервера для LDAP_ID $LDAP_ID:" 
+        echo "$RESPONSE" | tee -a "$LOG_FILE"
+
+        # Человекочитаемый вывод результатов
+        ADDED=$(echo "$RESPONSE" | jq -r '.added')
+        UPDATED=$(echo "$RESPONSE" | jq -r '.updated')
+        REMOVED=$(echo "$RESPONSE" | jq -r '.removed')
+        FAILED=$(echo "$RESPONSE" | jq -r '.failed')
+        STATUS=$(echo "$RESPONSE" | jq -r '.status')
+
+        write_log "Результат синхронизации LDAP_ID $LDAP_ID в realm $REALM_NAME (${SYNC_NAME}):"
+        write_log "  Добавлено новых пользователей: $ADDED"
+        write_log "  Обновлено пользователей:      $UPDATED"
+        write_log "  Удалено пользователей:       $REMOVED"
+        write_log "  Не удалось синхронизировать: $FAILED"
+        write_log "  Статус: $STATUS"
+        write_log "---------------------------------------------"
+    done
+}
+
+# -------------------------------
+# Основной цикл по realms
+# -------------------------------
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    write_log "Файл конфигурации $CONFIG_FILE не найден" "ERROR"
+    exit 1
+fi
+
+CONFIG=$(cat "$CONFIG_FILE")
+REALMS_COUNT=$(echo "$CONFIG" | jq '.realms | length')
+
+for ((i=0; i<REALMS_COUNT; i++)); do
+    write_log "=== Обработка realm №$i ==="
+
+    REALM_URL=$(echo "$CONFIG" | jq -r ".realms[$i].realm_URL")
+    REALM_NAME=$(echo "$CONFIG" | jq -r ".realms[$i].realm_name")
+    CLIENT_ID=$(echo "$CONFIG" | jq -r ".realms[$i].client_id")
+    CLIENT_SECRET=$(echo "$CONFIG" | jq -r ".realms[$i].client_secret")
+
+    write_log "REALM_URL    = $REALM_URL"
+    write_log "REALM_NAME   = $REALM_NAME"
+    write_log "CLIENT_ID    = $CLIENT_ID"
+    write_log "CLIENT_SECRET= $CLIENT_SECRET"
+
+    write_log "Запускаем получение токена..."
+    get_token "$REALM_URL" "$REALM_NAME" "$CLIENT_ID" "$CLIENT_SECRET"
+
+    if [[ -z "$TOKEN" ]]; then
+        write_log "Не удалось получить токен для realm '$REALM_NAME'" "ERROR"
+        continue
+    fi
+
+    write_log "Запускаем синхронизацию LDAP-компонентов..."
+    sync_ldap_component "$REALM_URL" "$REALM_NAME"
+done
+
+write_log "Скрипт завершил выполнение"
+
