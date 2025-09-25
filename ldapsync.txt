@@ -36,7 +36,7 @@ log() {
 # -------------------------------
 get_token() {
     local BASE_URL=$1       # базовый URL Keycloak
-    local REALM_NAME=$2     # имя realm для токена (обычно master)
+    local REALM_NAME=$2     # имя realm (из JSON)
     local CLIENT_ID=$3
     local CLIENT_SECRET=$4
 
@@ -116,8 +116,8 @@ for i in $(seq 0 $((REALM_COUNT - 1))); do
 
     echo "Обработка realm '$REALM_NAME' по адресу '$REALM_URL'..."
 
-    # Получаем токен (используем master realm)
-    TOKEN=$(get_token "$REALM_URL" "master" "$CLIENT_ID" "$CLIENT_SECRET")
+    # Получаем токен (теперь realm берём из JSON!)
+    TOKEN=$(get_token "$REALM_URL" "$REALM_NAME" "$CLIENT_ID" "$CLIENT_SECRET")
     if [[ $? -ne 0 ]]; then
         log "НЕ удалось получить токен для realm '$REALM_NAME'"
         continue
@@ -129,3 +129,11 @@ done
 
 log "Синхронизация LDAP завершена для всех realms"
 echo "Синхронизация завершена. Проверяйте лог $LOG_FILE"
+
+
+curl -v -X POST "https://keycloak/auth/realms/Group_test/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=K_Admin" \
+  -d "client_secret=123456"
+
