@@ -1,22 +1,19 @@
 #!/bin/bash
-
-# Скрипт синхронизации LDAP через Keycloak Admin API
+#
+# Скрипт синхронизации LDAP пользователей в Keycloak 16
+# Читает параметры из config.json и запускает синхронизацию для всех реалмов
+#
 
 CONFIG_FILE="config.json"
+LOG_FILE="/var/log/keycloak_ldap_sync.log"
 
-# Загружаем конфигурацию
+# Проверка наличия конфигурации
 if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "Файл конфигурации $CONFIG_FILE не найден"
+    echo "Файл конфигурации $CONFIG_FILE не найден" | tee -a "$LOG_FILE"
     exit 1
 fi
 
 CONFIG=$(cat "$CONFIG_FILE")
-
-REALM_URL=$(echo "$CONFIG" | jq -r '.realm_URL')
-REALM_NAME=$(echo "$CONFIG" | jq -r '.realm_name')
-CLIENT_ID=$(echo "$CONFIG" | jq -r '.client_id')
-CLIENT_SECRET=$(echo "$CONFIG" | jq -r '.client_secret')
-LDAP_ID=$(echo "$CONFIG" | jq -r '.ldap_id')
 
 # Функция получения токена
 get_token() {
@@ -25,14 +22,14 @@ get_token() {
     local CLIENT_ID=$3
     local CLIENT_SECRET=$4
 
-    >&2 echo "----- Получение токена -----"
-    >&2 echo "BASE_URL     = $BASE_URL"
-    >&2 echo "REALM_NAME   = $REALM_NAME"
-    >&2 echo "CLIENT_ID    = $CLIENT_ID"
-    >&2 echo "CLIENT_SECRET= $CLIENT_SECRET"
+    echo "----- Получение токена -----" | tee -a "$LOG_FILE"
+    echo "BASE_URL     = $BASE_URL" | tee -a "$LOG_FILE"
+    echo "REALM_NAME   = $REALM_NAME" | tee -a "$LOG_FILE"
+    echo "CLIENT_ID    = $CLIENT_ID" | tee -a "$LOG_FILE"
+    echo "CLIENT_SECRET= $CLIENT_SECRET" | tee -a "$LOG_FILE"
 
     local URL="${BASE_URL}realms/${REALM_NAME}/protocol/openid-connect/token"
-    >&2 echo "Запрос к URL: $URL"
+    echo "Запрос к URL: $URL" | tee -a "$LOG_FILE"
 
     RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$URL" \
         -H "Content-Type: application/x-www-form-urlencoded" \
@@ -40,14 +37,14 @@ get_token() {
         -d "client_id=${CLIENT_ID}" \
         -d "client_secret=${CLIENT_SECRET}")
 
-    >&2 echo "Ответ от сервера:"
-    >&2 echo "$RESPONSE"
-    >&2 echo "----------------------------"
+    echo "Ответ от сервера:" | tee -a "$LOG_FILE"
+    echo "$RESPONSE" | tee -a "$LOG_FILE"
+    echo "----------------------------" | tee -a "$LOG_FILE"
 
     TOKEN=$(echo "$RESPONSE" | jq -r '.access_token' 2>/dev/null)
 
     if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
-        >&2 echo "Ошибка: токен не получен"
+        echo "Ошибка: токен не получен" | tee -a "$LOG_FILE"
         return 1
     else
         echo "$TOKEN"
@@ -61,34 +58,50 @@ sync_ldap() {
     local LDAP_ID=$3
     local TOKEN=$4
 
-    >&2 echo "----- Синхронизация LDAP -----"
-    >&2 echo "BASE_URL   = $BASE_URL"
-    >&2 echo "REALM_NAME = $REALM_NAME"
-    >&2 echo "LDAP_ID    = $LDAP_ID"
+    echo "----- Синхронизация LDAP -----" | tee -a "$LOG_FILE"
+    echo "BASE_URL   = $BASE_URL" | tee -a "$LOG_FILE"
+    echo "REALM_NAME = $REALM_NAME" | tee -a "$LOG_FILE"
+    echo "LDAP_ID    = $LDAP_ID" | tee -a "$LOG_FILE"
 
     local SYNC_URL="${BASE_URL}admin/realms/${REALM_NAME}/user-storage/${LDAP_ID}/sync"
-
-    >&2 echo "Выполняется запрос к: $SYNC_URL"
+    echo "Выполняется запрос к: $SYNC_URL" | tee -a "$LOG_FILE"
 
     RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$SYNC_URL" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d '{"action":"triggerFullSync"}')
 
-    >&2 echo "Ответ от сервера:"
-    >&2 echo "$RESPONSE"
-    >&2 echo "-------------------------------"
+    echo "Ответ от сервера:" | tee -a "$LOG_FILE"
+    echo "$RESPONSE" | tee -a "$LOG_FILE"
+    echo "-------------------------------" | tee -a "$LOG_FILE"
 }
 
-# Основной процесс
-echo "Запускаем получение токена..."
-TOKEN=$(get_token "$REALM_URL" "$REALM_NAME" "$CLIENT_ID" "$CLIENT_SECRET")
+# Основной цикл по всем realms
+REALMS_COUNT=$(echo "$CONFIG" | jq '.realms | length')
 
-if [[ -z "$TOKEN" ]]; then
-    echo "Не удалось получить токен для realm '$REALM_NAME'"
-    exit 1
-fi
+for ((i=0; i<REALMS_COUNT; i++)); do
+    echo "=== Обработка realm №$i ===" | tee -a "$LOG_FILE"
 
-echo "Запускаем синхронизацию LDAP..."
-sync_ldap "$REALM_URL" "$REALM_NAME" "$LDAP_ID" "$TOKEN"
+    REALM_URL=$(echo "$CONFIG" | jq -r ".realms[$i].realm_URL")
+    REALM_NAME=$(echo "$CONFIG" | jq -r ".realms[$i].realm_name")
+    CLIENT_ID=$(echo "$CONFIG" | jq -r ".realms[$i].client_id")
+    CLIENT_SECRET=$(echo "$CONFIG" | jq -r ".realms[$i].client_secret")
+    LDAP_ID=$(echo "$CONFIG" | jq -r ".realms[$i].ldap_id")
 
+    echo "REALM_URL    = $REALM_URL" | tee -a "$LOG_FILE"
+    echo "REALM_NAME   = $REALM_NAME" | tee -a "$LOG_FILE"
+    echo "CLIENT_ID    = $CLIENT_ID" | tee -a "$LOG_FILE"
+    echo "CLIENT_SECRET= $CLIENT_SECRET" | tee -a "$LOG_FILE"
+    echo "LDAP_ID      = $LDAP_ID" | tee -a "$LOG_FILE"
+
+    echo "Запускаем получение токена..." | tee -a "$LOG_FILE"
+    TOKEN=$(get_token "$REALM_URL" "$REALM_NAME" "$CLIENT_ID" "$CLIENT_SECRET")
+
+    if [[ -z "$TOKEN" ]]; then
+        echo "Не удалось получить токен для realm '$REALM_NAME'" | tee -a "$LOG_FILE"
+        continue
+    fi
+
+    echo "Запускаем синхронизацию LDAP..." | tee -a "$LOG_FILE"
+    sync_ldap "$REALM_URL" "$REALM_NAME" "$LDAP_ID" "$TOKEN"
+done
