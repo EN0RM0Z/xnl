@@ -3,7 +3,7 @@
 # -------------------------------
 # Настройки
 # -------------------------------
-JSON_FILE="/etc/ldap_sync/realms.json"     # путь к JSON с настройками
+CONFIG_FILE="/etc/ldap_sync/realms.json"   # путь к JSON с настройками
 LOG_FILE="/var/log/ldap_sync.log"          # лог файл
 
 # -------------------------------
@@ -79,14 +79,19 @@ sync_ldap() {
 }
 
 # -------------------------------
-# Основной цикл по JSON с realms
+# Загружаем конфигурацию
 # -------------------------------
-REALM_COUNT=$(jq '.realms | length' "$JSON_FILE")
+CONFIG=$(cat "$CONFIG_FILE")
+
+# -------------------------------
+# Основной цикл по realms
+# -------------------------------
+REALM_COUNT=$(echo "$CONFIG" | jq '.realms | length')
 for i in $(seq 0 $((REALM_COUNT - 1))); do
-    REALM_URL=$(jq -r ".realms[$i].realm_URL" "$JSON_FILE")
-    REALM_NAME=$(jq -r ".realms[$i].realm_name" "$JSON_FILE")
-    CLIENT_ID=$(jq -r ".realms[$i].client_id" "$JSON_FILE")
-    CLIENT_SECRET=$(jq -r ".realms[$i].client_secret" "$JSON_FILE")
+    REALM_URL=$(echo "$CONFIG" | jq -r ".realms[$i].realm_URL")
+    REALM_NAME=$(echo "$CONFIG" | jq -r ".realms[$i].realm_name")
+    CLIENT_ID=$(echo "$CONFIG" | jq -r ".realms[$i].client_id")
+    CLIENT_SECRET=$(echo "$CONFIG" | jq -r ".realms[$i].client_secret")
 
     log "Обработка realm '$REALM_NAME' по адресу '$REALM_URL'"
 
@@ -102,3 +107,4 @@ for i in $(seq 0 $((REALM_COUNT - 1))); do
 done
 
 log "Синхронизация LDAP завершена для всех realms"
+
