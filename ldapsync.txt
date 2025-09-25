@@ -6,6 +6,7 @@
 
 CONFIG_FILE="config.json"
 LOG_FILE="/var/log/keycloak_ldap_sync.log"
+TOKEN=""  # глобальная переменная для токена
 
 # Проверка конфигурационного файла
 if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -43,15 +44,17 @@ get_token() {
     echo "$RESPONSE" | tee -a "$LOG_FILE"
     echo "----------------------------" | tee -a "$LOG_FILE"
 
-    TOKEN=$(echo "$RESPONSE" | jq -r '.access_token' 2>/dev/null)
+    local TMP_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token' 2>/dev/null)
 
-    if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+    if [[ -z "$TMP_TOKEN" || "$TMP_TOKEN" == "null" ]]; then
         echo "Ошибка: токен не получен для realm $REALM_NAME" | tee -a "$LOG_FILE"
+        TOKEN=""  # явно очищаем переменную
         return 1
     fi
 
-    # Возвращаем токен через stdout
-    echo "$TOKEN"
+    TOKEN="$TMP_TOKEN"
+    echo "Токен успешно получен для realm $REALM_NAME" | tee -a "$LOG_FILE"
+    return 0
 }
 
 # -------------------------------
@@ -61,7 +64,6 @@ sync_ldap() {
     local BASE_URL=$1
     local REALM_NAME=$2
     local LDAP_ID=$3
-    local TOKEN=$4
 
     echo "----- Синхронизация LDAP -----" | tee -a "$LOG_FILE"
     echo "BASE_URL   = $BASE_URL" | tee -a "$LOG_FILE"
@@ -107,16 +109,16 @@ for ((i=0; i<REALMS_COUNT; i++)); do
     echo "LDAP_ID      = $LDAP_ID" | tee -a "$LOG_FILE"
 
     echo "Запускаем получение токена..." | tee -a "$LOG_FILE"
-    TOKEN_TEMP=$(get_token "$REALM_URL" "$REALM_NAME" "$CLIENT_ID" "$CLIENT_SECRET")
+    get_token "$REALM_URL" "$REALM_NAME" "$CLIENT_ID" "$CLIENT_SECRET"
 
-    if [[ $? -ne 0 || -z "$TOKEN_TEMP" ]]; then
+    if [[ -z "$TOKEN" ]]; then
         echo "Не удалось получить токен для realm '$REALM_NAME'" | tee -a "$LOG_FILE"
         continue
     fi
-    TOKEN=$TOKEN_TEMP
 
     echo "Запускаем синхронизацию LDAP..." | tee -a "$LOG_FILE"
-    sync_ldap "$REALM_URL" "$REALM_NAME" "$LDAP_ID" "$TOKEN"
+    sync_ldap "$REALM_URL" "$REALM_NAME" "$LDAP_ID"
 done
 
 echo "Скрипт завершил выполнение" | tee -a "$LOG_FILE"
+
