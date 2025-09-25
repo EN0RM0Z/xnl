@@ -35,15 +35,24 @@ log() {
 # Получение токена доступа для Admin API
 # -------------------------------
 get_token() {
-    local URL=$1
-    local CLIENT_ID=$2
-    local CLIENT_SECRET=$3
+    local BASE_URL=$1       # базовый URL Keycloak
+    local REALM_NAME=$2     # имя realm для токена (обычно master)
+    local CLIENT_ID=$3
+    local CLIENT_SECRET=$4
 
-    TOKEN=$(curl -s -X POST "$URL/realms/master/protocol/openid-connect/token" \
+    echo "Получаем токен для realm '$REALM_NAME'..."
+    TOKEN=$(curl -s -X POST "$BASE_URL/realms/$REALM_NAME/protocol/openid-connect/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "grant_type=client_credentials" \
         -d "client_id=$CLIENT_ID" \
         -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
+
+    if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+        echo "Ошибка: не удалось получить токен для realm '$REALM_NAME' с client_id='$CLIENT_ID'"
+        return 1
+    else
+        echo "Токен успешно получен"
+    fi
 
     echo "$TOKEN"
 }
@@ -52,27 +61,37 @@ get_token() {
 # Функция синхронизации LDAP для одного realm
 # -------------------------------
 sync_ldap() {
-    local URL=$1
-    local REALM=$2
+    local BASE_URL=$1
+    local REALM_NAME=$2
     local TOKEN=$3
-    local TYPE=$4   # значение для API
-    local NAME=$5   # красивое имя для логов
+    local TYPE=$4
+    local NAME=$5
 
-    # Получаем список всех LDAP-провайдеров в realm
-    LDAP_PROVIDERS=$(curl -s -X GET "$URL/admin/realms/$REALM/user-storage" \
+    echo "Получаем список LDAP-провайдеров для realm '$REALM_NAME'..."
+    LDAP_PROVIDERS=$(curl -s -X GET "$BASE_URL/admin/realms/$REALM_NAME/user-storage" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" | jq -r '.[].id')
 
+    if [[ -z "$LDAP_PROVIDERS" ]]; then
+        echo "Внимание: LDAP-провайдеров не найдено для realm '$REALM_NAME'"
+        log "Внимание: LDAP-провайдеров не найдено для realm '$REALM_NAME'"
+        return
+    fi
+
     for PROVIDER_ID in $LDAP_PROVIDERS; do
-        log "Запуск $NAME синхронизации LDAP для realm '$REALM', провайдер '$PROVIDER_ID'"
+        echo "Запуск $NAME синхронизации LDAP для провайдера '$PROVIDER_ID'..."
+        log "Запуск $NAME синхронизации LDAP для realm '$REALM_NAME', провайдер '$PROVIDER_ID'"
+
         RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            "$URL/admin/realms/$REALM/user-storage/$PROVIDER_ID/sync?action=$TYPE" \
+            "$BASE_URL/admin/realms/$REALM_NAME/user-storage/$PROVIDER_ID/sync?action=$TYPE" \
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json")
 
         if [[ "$RESPONSE" == "204" ]]; then
+            echo "$NAME синхронизация LDAP успешно завершена для провайдера '$PROVIDER_ID'"
             log "$NAME синхронизация LDAP успешно завершена для провайдера '$PROVIDER_ID'"
         else
+            echo "$NAME синхронизация LDAP НЕ удалась для провайдера '$PROVIDER_ID', HTTP код: $RESPONSE"
             log "$NAME синхронизация LDAP НЕ удалась для провайдера '$PROVIDER_ID', HTTP код: $RESPONSE"
         fi
     done
@@ -87,17 +106,19 @@ CONFIG=$(cat "$CONFIG_FILE")
 # Основной цикл по realms
 # -------------------------------
 REALM_COUNT=$(echo "$CONFIG" | jq '.realms | length')
+echo "Всего realms в конфиге: $REALM_COUNT"
+
 for i in $(seq 0 $((REALM_COUNT - 1))); do
     REALM_URL=$(echo "$CONFIG" | jq -r ".realms[$i].realm_URL")
     REALM_NAME=$(echo "$CONFIG" | jq -r ".realms[$i].realm_name")
     CLIENT_ID=$(echo "$CONFIG" | jq -r ".realms[$i].client_id")
     CLIENT_SECRET=$(echo "$CONFIG" | jq -r ".realms[$i].client_secret")
 
-    log "Обработка realm '$REALM_NAME' по адресу '$REALM_URL'"
+    echo "Обработка realm '$REALM_NAME' по адресу '$REALM_URL'..."
 
-    # Получаем токен доступа
-    TOKEN=$(get_token "$REALM_URL" "$CLIENT_ID" "$CLIENT_SECRET")
-    if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+    # Получаем токен (используем master realm)
+    TOKEN=$(get_token "$REALM_URL" "master" "$CLIENT_ID" "$CLIENT_SECRET")
+    if [[ $? -ne 0 ]]; then
         log "НЕ удалось получить токен для realm '$REALM_NAME'"
         continue
     fi
@@ -107,4 +128,4 @@ for i in $(seq 0 $((REALM_COUNT - 1))); do
 done
 
 log "Синхронизация LDAP завершена для всех realms"
-
+echo "Синхронизация завершена. Проверяйте лог $LOG_FILE"
