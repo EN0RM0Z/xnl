@@ -73,6 +73,7 @@ get_token() {
 sync_ldap_component() {
     local BASE_URL=$1
     local REALM_NAME=$2
+    local SYNC_TYPE=${3:-triggerFullSync}  # по умолчанию triggerFullSync
 
     write_log "Поиск LDAP компонентов в realm $REALM_NAME..."
     COMPONENTS_RESPONSE=$(invoke_keycloak_request \
@@ -89,18 +90,20 @@ sync_ldap_component() {
 
     for LDAP_ID in $LDAP_IDS; do
         write_log "Найден LDAP провайдер c ID: $LDAP_ID. Запускаем синхронизацию..."
-        SYNC_URL="${BASE_URL%/}/admin/realms/${REALM_NAME}/user-storage/${LDAP_ID}/sync"
+
+        # Передаем action как query параметр
+        SYNC_URL="${BASE_URL%/}/admin/realms/${REALM_NAME}/user-storage/${LDAP_ID}/sync?action=${SYNC_TYPE}"
 
         RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$SYNC_URL" \
             -H "Authorization: Bearer $TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"action":"triggerFullSync"}')
+            -H "Content-Type: application/json")
 
         write_log "Ответ сервера для LDAP_ID $LDAP_ID:" 
         echo "$RESPONSE" | tee -a "$LOG_FILE"
         write_log "-----------------------------------------" 
     done
 }
+
 
 # -------------------------------
 # Основной цикл по realms
