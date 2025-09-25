@@ -62,3 +62,69 @@ tail -f $KEYCLOAK_HOME/standalone/log/ldap_duplicate_emails.log
 Здесь будут только ошибки вида:
 
 ModelDuplicateException: Can't import user ... because email ... already exists ...
+
+
+======================
+
+
+Отлично! Вот готовый фрагмент XML, который можно просто вставить в секцию <subsystem xmlns="urn:jboss:domain:logging:..."> твоего standalone.xml или standalone-ha.xml.
+
+Он создаёт отдельный лог только для ошибок дублирования email LDAP.
+
+<!-- Handler для логирования дубликатов email -->
+<periodic-rotating-file-handler name="LDAP_DUP_EMAIL_FILE">
+    <formatter>
+        <pattern-formatter pattern="%d %-5p [%c] (%t) %s%E%n"/>
+    </formatter>
+    <file relative-to="jboss.server.log.dir" path="ldap_duplicate_emails.log"/>
+    <suffix value=".yyyy-MM-dd"/>
+    <append value="true"/>
+</periodic-rotating-file-handler>
+
+<!-- Logger LDAP с фильтром только на ModelDuplicateException -->
+<logger category="org.keycloak.storage.ldap.LDAPStorageProviderFactory">
+    <level name="ERROR"/>
+    <handlers>
+        <handler name="LDAP_DUP_EMAIL_FILE"/>
+    </handlers>
+    <filter-spec value="contains('%msg','ModelDuplicateException')"/>
+</logger>
+
+✅ Пошагово что делать
+
+Открыть конфигурацию Keycloak:
+
+cd $KEYCLOAK_HOME/standalone/configuration
+nano standalone.xml
+
+
+Найти секцию:
+
+<subsystem xmlns="urn:jboss:domain:logging:12.0">
+
+
+Вставить выше приведённый блок в эту секцию.
+
+Сохранить изменения и выйти из редактора.
+
+Перезапустить Keycloak:
+
+$KEYCLOAK_HOME/bin/jboss-cli.sh --connect --command=":reload"
+
+
+или если Keycloak как systemd-сервис:
+
+sudo systemctl restart keycloak
+
+
+Проверить работу:
+
+Основной лог не содержит ошибок дублирования:
+
+tail -f $KEYCLOAK_HOME/standalone/log/server.log
+
+
+Все дубли email идут в отдельный лог:
+
+tail -f $KEYCLOAK_HOME/standalone/log/ldap_duplicate_emails.log
+
