@@ -1,0 +1,39 @@
+ldap-sync-client
+
+1. Получение токена (grant_type=client_credentials)
+curl -X POST "http://localhost:8080/auth/realms/master/protocol/openid-connect/token" ^
+ -H "Content-Type: application/x-www-form-urlencoded" ^
+ -d "client_id=my-admin-client" ^
+ -d "client_secret=my-fixed-secret" ^
+ -d "grant_type=client_credentials" ^
+ -o token.json
+
+2. Получить id клиента по его clientId
+
+(замени <realm> и <clientId> на свои значения)
+
+curl -X GET "http://localhost:8080/auth/admin/realms/<realm>/clients?clientId=<clientId>" ^
+ -H "Authorization: Bearer <ВСТАВЬ_ТОКЕН_СЮДА>" ^
+ -o client.json
+
+
+👉 В файле client.json ищи "id": "...." — это UUID клиента.
+
+3. Установить новый секрет для клиента
+
+(замени <realm> и <client-uuid>)
+
+curl -X PUT "http://localhost:8080/auth/admin/realms/<realm>/clients/<client-uuid>/client-secret" ^
+ -H "Authorization: Bearer <ВСТАВЬ_ТОКЕН_СЮДА>" ^
+ -H "Content-Type: application/json" ^
+ -d "{\"value\":\"my-fixed-secret\"}" ^
+ -o set-secret.json
+
+
+📂 После выполнения у тебя будут такие файлы:
+
+token.json → access_token
+
+client.json → UUID клиента
+
+set-secret.json → результат замены секрета
