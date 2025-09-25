@@ -1,13 +1,13 @@
 #!/bin/bash
 #
 # Скрипт синхронизации LDAP пользователей в Keycloak 16
-# Читает параметры из config.json и запускает синхронизацию для всех реалмов
+# Использует config.json с массивом realms[]
 #
 
 CONFIG_FILE="config.json"
 LOG_FILE="/var/log/keycloak_ldap_sync.log"
 
-# Проверка наличия конфигурации
+# Проверка конфигурационного файла
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "Файл конфигурации $CONFIG_FILE не найден" | tee -a "$LOG_FILE"
     exit 1
@@ -15,27 +15,29 @@ fi
 
 CONFIG=$(cat "$CONFIG_FILE")
 
+# -------------------------------
 # Функция получения токена
+# -------------------------------
 get_token() {
     local BASE_URL=$1
     local REALM_NAME=$2
     local CLIENT_ID=$3
     local CLIENT_SECRET=$4
 
-    echo "----- Получение токена -----" | tee -a "$LOG_FILE"
+    echo "----- Получение токена для realm $REALM_NAME -----" | tee -a "$LOG_FILE"
     echo "BASE_URL     = $BASE_URL" | tee -a "$LOG_FILE"
-    echo "REALM_NAME   = $REALM_NAME" | tee -a "$LOG_FILE"
     echo "CLIENT_ID    = $CLIENT_ID" | tee -a "$LOG_FILE"
     echo "CLIENT_SECRET= $CLIENT_SECRET" | tee -a "$LOG_FILE"
 
-    local URL="${BASE_URL}realms/${REALM_NAME}/protocol/openid-connect/token"
+    # Формируем URL
+    local URL="${BASE_URL%/}/realms/${REALM_NAME}/protocol/openid-connect/token"
     echo "Запрос к URL: $URL" | tee -a "$LOG_FILE"
 
     RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$URL" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "grant_type=client_credentials" \
-        -d "client_id=${CLIENT_ID}" \
-        -d "client_secret=${CLIENT_SECRET}")
+        -d "client_id=$CLIENT_ID" \
+        -d "client_secret=$CLIENT_SECRET")
 
     echo "Ответ от сервера:" | tee -a "$LOG_FILE"
     echo "$RESPONSE" | tee -a "$LOG_FILE"
@@ -44,14 +46,17 @@ get_token() {
     TOKEN=$(echo "$RESPONSE" | jq -r '.access_token' 2>/dev/null)
 
     if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
-        echo "Ошибка: токен не получен" | tee -a "$LOG_FILE"
+        echo "Ошибка: токен не получен для realm $REALM_NAME" | tee -a "$LOG_FILE"
         return 1
-    else
-        echo "$TOKEN"
     fi
+
+    # Возвращаем токен через stdout
+    echo "$TOKEN"
 }
 
+# -------------------------------
 # Функция синхронизации LDAP
+# -------------------------------
 sync_ldap() {
     local BASE_URL=$1
     local REALM_NAME=$2
@@ -63,7 +68,12 @@ sync_ldap() {
     echo "REALM_NAME = $REALM_NAME" | tee -a "$LOG_FILE"
     echo "LDAP_ID    = $LDAP_ID" | tee -a "$LOG_FILE"
 
-    local SYNC_URL="${BASE_URL}admin/realms/${REALM_NAME}/user-storage/${LDAP_ID}/sync"
+    if [[ -z "$LDAP_ID" || "$LDAP_ID" == "null" ]]; then
+        echo "Ошибка: ldap_id не задан в config.json для realm $REALM_NAME" | tee -a "$LOG_FILE"
+        return 1
+    fi
+
+    SYNC_URL="${BASE_URL%/}/admin/realms/${REALM_NAME}/user-storage/${LDAP_ID}/sync"
     echo "Выполняется запрос к: $SYNC_URL" | tee -a "$LOG_FILE"
 
     RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$SYNC_URL" \
@@ -76,7 +86,9 @@ sync_ldap() {
     echo "-------------------------------" | tee -a "$LOG_FILE"
 }
 
-# Основной цикл по всем realms
+# -------------------------------
+# Основной цикл по realms
+# -------------------------------
 REALMS_COUNT=$(echo "$CONFIG" | jq '.realms | length')
 
 for ((i=0; i<REALMS_COUNT; i++)); do
@@ -95,13 +107,16 @@ for ((i=0; i<REALMS_COUNT; i++)); do
     echo "LDAP_ID      = $LDAP_ID" | tee -a "$LOG_FILE"
 
     echo "Запускаем получение токена..." | tee -a "$LOG_FILE"
-    TOKEN=$(get_token "$REALM_URL" "$REALM_NAME" "$CLIENT_ID" "$CLIENT_SECRET")
+    TOKEN_TEMP=$(get_token "$REALM_URL" "$REALM_NAME" "$CLIENT_ID" "$CLIENT_SECRET")
 
-    if [[ -z "$TOKEN" ]]; then
+    if [[ $? -ne 0 || -z "$TOKEN_TEMP" ]]; then
         echo "Не удалось получить токен для realm '$REALM_NAME'" | tee -a "$LOG_FILE"
         continue
     fi
+    TOKEN=$TOKEN_TEMP
 
     echo "Запускаем синхронизацию LDAP..." | tee -a "$LOG_FILE"
     sync_ldap "$REALM_URL" "$REALM_NAME" "$LDAP_ID" "$TOKEN"
 done
+
+echo "Скрипт завершил выполнение" | tee -a "$LOG_FILE"
