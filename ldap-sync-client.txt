@@ -1,3 +1,7 @@
+SELECT ID, CLIENT_ID, NAME
+FROM CLIENT
+WHERE CLIENT_ID='ldap-sync-client';
+
 ldap-sync-client
 
 1. Получение токена (grant_type=client_credentials)
