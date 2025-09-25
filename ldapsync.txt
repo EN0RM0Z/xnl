@@ -1,0 +1,104 @@
+#!/bin/bash
+
+# -------------------------------
+# Настройки
+# -------------------------------
+JSON_FILE="/etc/ldap_sync/realms.json"     # путь к JSON с настройками
+LOG_FILE="/var/log/ldap_sync.log"          # лог файл
+SYNC_TYPE="$1"                             # тип синхронизации: full или changed
+
+if [[ -z "$SYNC_TYPE" ]]; then
+    echo "Использование: $0 <full|changed>"
+    exit 1
+fi
+
+# -------------------------------
+# Преобразуем тип синхронизации в значение для API Keycloak
+# -------------------------------
+if [[ "$SYNC_TYPE" == "full" ]]; then
+    API_ACTION="triggerFullSync"
+elif [[ "$SYNC_TYPE" == "changed" ]]; then
+    API_ACTION="triggerChangedUsersSync"
+else
+    echo "Неизвестный тип синхронизации: $SYNC_TYPE"
+    exit 1
+fi
+
+# -------------------------------
+# Функция логирования
+# -------------------------------
+log() {
+    # выводим время и сообщение, пишем в лог
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+# -------------------------------
+# Получение токена доступа для Admin API
+# -------------------------------
+get_token() {
+    local URL=$1
+    local CLIENT_ID=$2
+    local CLIENT_SECRET=$3
+
+    TOKEN=$(curl -s -X POST "$URL/realms/master/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=$CLIENT_ID" \
+        -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
+
+    echo "$TOKEN"
+}
+
+# -------------------------------
+# Функция синхронизации LDAP для одного realm
+# -------------------------------
+sync_ldap() {
+    local URL=$1
+    local REALM=$2
+    local TOKEN=$3
+    local ACTION=$4
+
+    # Получаем список всех LDAP-провайдеров в realm
+    LDAP_PROVIDERS=$(curl -s -X GET "$URL/admin/realms/$REALM/user-storage" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" | jq -r '.[].id')
+
+    for PROVIDER_ID in $LDAP_PROVIDERS; do
+        log "Запуск синхронизации LDAP для realm '$REALM', провайдер '$PROVIDER_ID', тип '$SYNC_TYPE'"
+        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "$URL/admin/realms/$REALM/user-storage/$PROVIDER_ID/sync?action=$ACTION" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json")
+
+        if [[ "$RESPONSE" == "204" ]]; then
+            log "Синхронизация LDAP успешно завершена для провайдера '$PROVIDER_ID'"
+        else
+            log "Синхронизация LDAP НЕ удалась для провайдера '$PROVIDER_ID', HTTP код: $RESPONSE"
+        fi
+    done
+}
+
+# -------------------------------
+# Основной цикл по JSON с realms
+# -------------------------------
+REALM_COUNT=$(jq '.realms | length' "$JSON_FILE")
+for i in $(seq 0 $((REALM_COUNT - 1))); do
+    REALM_URL=$(jq -r ".realms[$i].realm_URL" "$JSON_FILE")
+    REALM_NAME=$(jq -r ".realms[$i].realm_name" "$JSON_FILE")
+    CLIENT_ID=$(jq -r ".realms[$i].client_id" "$JSON_FILE")
+    CLIENT_SECRET=$(jq -r ".realms[$i].client_secret" "$JSON_FILE")
+
+    log "Обработка realm '$REALM_NAME' по адресу '$REALM_URL'"
+
+    # Получаем токен доступа
+    TOKEN=$(get_token "$REALM_URL" "$CLIENT_ID" "$CLIENT_SECRET")
+    if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+        log "НЕ удалось получить токен для realm '$REALM_NAME'"
+        continue
+    fi
+
+    # Синхронизация LDAP
+    sync_ldap "$REALM_URL" "$REALM_NAME" "$TOKEN" "$API_ACTION"
+done
+
+log "Синхронизация LDAP завершена для всех realms"
