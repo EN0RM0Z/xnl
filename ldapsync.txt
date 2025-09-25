@@ -1,13 +1,14 @@
 #!/bin/bash
 #
 # Скрипт синхронизации LDAP пользователей в Keycloak 16
-# Поддерживает поиск LDAP-компонента через Components API
 # Использует config.json с массивом realms[]
+# Поддерживает выбор типа синхронизации через SYNC_TYPE
 #
 
 CONFIG_FILE="config.json"
 LOG_FILE="/var/log/keycloak_ldap_sync.log"
 TOKEN=""  # глобальная переменная для токена
+SYNC_TYPE=${1:-triggerFullSync}  # По умолчанию полная синхронизация
 
 # -------------------------------
 # Функция записи логов
@@ -35,7 +36,7 @@ invoke_keycloak_request() {
 }
 
 # -------------------------------
-# Функция получения токена (не трогаем, уже рабочая)
+# Функция получения токена (не трогаем, рабочая)
 # -------------------------------
 get_token() {
     local BASE_URL=$1
@@ -73,7 +74,7 @@ get_token() {
 sync_ldap_component() {
     local BASE_URL=$1
     local REALM_NAME=$2
-    local SYNC_TYPE=${3:-triggerFullSync}  # по умолчанию triggerFullSync
+    local SYNC_TYPE=$3
 
     write_log "Поиск LDAP компонентов в realm $REALM_NAME..."
     COMPONENTS_RESPONSE=$(invoke_keycloak_request \
@@ -89,7 +90,7 @@ sync_ldap_component() {
     fi
 
     for LDAP_ID in $LDAP_IDS; do
-        write_log "Найден LDAP провайдер c ID: $LDAP_ID. Запускаем синхронизацию..."
+        write_log "Найден LDAP провайдер c ID: $LDAP_ID. Запускаем синхронизацию ($SYNC_TYPE)..."
 
         # Передаем action как query параметр
         SYNC_URL="${BASE_URL%/}/admin/realms/${REALM_NAME}/user-storage/${LDAP_ID}/sync?action=${SYNC_TYPE}"
@@ -98,12 +99,22 @@ sync_ldap_component() {
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json")
 
-        write_log "Ответ сервера для LDAP_ID $LDAP_ID:" 
-        echo "$RESPONSE" | tee -a "$LOG_FILE"
-        write_log "-----------------------------------------" 
+        # Парсим результат и формируем человекочитаемый вывод
+        ADDED=$(echo "$RESPONSE" | jq -r '.added // 0')
+        UPDATED=$(echo "$RESPONSE" | jq -r '.updated // 0')
+        REMOVED=$(echo "$RESPONSE" | jq -r '.removed // 0')
+        FAILED=$(echo "$RESPONSE" | jq -r '.failed // 0')
+        STATUS=$(echo "$RESPONSE" | jq -r '.status // "нет подробностей"')
+
+        write_log "Результат синхронизации LDAP_ID $LDAP_ID в realm $REALM_NAME:"
+        write_log "  Добавлено новых пользователей: $ADDED"
+        write_log "  Обновлено пользователей:      $UPDATED"
+        write_log "  Удалено пользователей:       $REMOVED"
+        write_log "  Не удалось синхронизировать: $FAILED"
+        write_log "  Статус: $STATUS"
+        write_log "---------------------------------------------"
     done
 }
-
 
 # -------------------------------
 # Основной цикл по realms
@@ -138,7 +149,7 @@ for ((i=0; i<REALMS_COUNT; i++)); do
     fi
 
     write_log "Запускаем синхронизацию LDAP-компонентов..."
-    sync_ldap_component "$REALM_URL" "$REALM_NAME"
+    sync_ldap_component "$REALM_URL" "$REALM_NAME" "$SYNC_TYPE"
 done
 
 write_log "Скрипт завершил выполнение"
