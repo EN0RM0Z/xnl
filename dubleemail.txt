@@ -1,0 +1,64 @@
+отправляет только ошибки дублирования email (ModelDuplicateException) LDAP в отдельный лог.
+
+1️⃣ Handler для отдельного файла
+
+В секцию <subsystem xmlns="urn:jboss:domain:logging:..."> добавь:
+
+<periodic-rotating-file-handler name="LDAP_DUP_EMAIL_FILE">
+    <formatter>
+        <pattern-formatter pattern="%d %-5p [%c] (%t) %s%E%n"/>
+    </formatter>
+    <file relative-to="jboss.server.log.dir" path="ldap_duplicate_emails.log"/>
+    <suffix value=".yyyy-MM-dd"/>
+    <append value="true"/>
+</periodic-rotating-file-handler>
+
+
+Лог будет писаться в $KEYCLOAK_HOME/standalone/log/ldap_duplicate_emails.log.
+
+Ротация по дате включена.
+
+2️⃣ Logger с фильтром на дубли email
+
+Сразу после handler добавь logger:
+
+<logger category="org.keycloak.storage.ldap.LDAPStorageProviderFactory">
+    <level name="ERROR"/>
+    <handlers>
+        <handler name="LDAP_DUP_EMAIL_FILE"/>
+    </handlers>
+    <filter-spec value="contains('%msg','ModelDuplicateException')"/>
+</logger>
+
+
+✅ Объяснение:
+
+level="ERROR" — только ошибки.
+
+filter-spec — пропускаем только сообщения, содержащие ModelDuplicateException, остальные LDAP ошибки остаются в основном логе.
+
+3️⃣ Перезапуск Keycloak
+$KEYCLOAK_HOME/bin/jboss-cli.sh --connect --command=":reload"
+
+
+Или через systemctl:
+
+sudo systemctl restart keycloak
+
+4️⃣ Проверка
+
+Основной лог:
+
+tail -f $KEYCLOAK_HOME/standalone/log/server.log
+
+
+Ошибки дублирования email больше не должны появляться.
+
+Лог дубликатов email:
+
+tail -f $KEYCLOAK_HOME/standalone/log/ldap_duplicate_emails.log
+
+
+Здесь будут только ошибки вида:
+
+ModelDuplicateException: Can't import user ... because email ... already exists ...
