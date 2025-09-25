@@ -1,82 +1,34 @@
-1️⃣ Проверяем доступ к Admin API
-
-Если Keycloak в Docker, лучше сначала выполнить команду внутри контейнера, чтобы убедиться, что Admin API доступен:
-
-docker exec -it <keycloak_container_name> bash
-
-
-Внутри контейнера:
-
-curl -k -X GET -H "Authorization: Bearer <ACCESS_TOKEN>" "http://localhost:8080/auth/admin/realms/<REALM>/clients" -o clients.json
-
-
-<REALM> — точное имя realm.
-
-Если вернуло список клиентов → API доступен.
-
-Если внутри контейнера работает, но с Windows CMD 404 → проблема с пробросом портов или jboss.bind.address.
-
-2️⃣ Получаем UUID клиента
-
-В CMD (Windows) проще всего:
-
-curl -k -X GET ^
-  -H "Authorization: Bearer <ACCESS_TOKEN>" ^
-  "http://localhost:8080/auth/admin/realms/<REALM>/clients" ^
-  -o clients.json
-
-
-Открываем clients.json, ищем нужный clientId → берём поле id → это UUID.
-
-3️⃣ Меняем секрет клиента
-curl -k -X PUT ^
-  -H "Authorization: Bearer <ACCESS_TOKEN>" ^
-  -H "Content-Type: application/json" ^
-  -d "{\"value\":\"my-fixed-secret\"}" ^
-  "http://localhost:8080/auth/admin/realms/<REALM>/clients/<CLIENT_UUID>/client-secret" ^
-  -o set-secret.json
-====================
-
-SELECT ID, CLIENT_ID, NAME
-FROM CLIENT
-WHERE CLIENT_ID='ldap-sync-client';
-
-ldap-sync-client
-
-1. Получение токена (grant_type=client_credentials)
+1️⃣ Получение токена для сервисного пользователя
 curl -X POST "http://localhost:8080/auth/realms/master/protocol/openid-connect/token" ^
- -H "Content-Type: application/x-www-form-urlencoded" ^
- -d "client_id=my-admin-client" ^
- -d "client_secret=my-fixed-secret" ^
- -d "grant_type=client_credentials" ^
- -o token.json
-
-2. Получить id клиента по его clientId
-
-(замени <realm> и <clientId> на свои значения)
-
-curl -X GET "http://localhost:8080/auth/admin/realms/<realm>/clients?clientId=<clientId>" ^
- -H "Authorization: Bearer <ВСТАВЬ_ТОКЕН_СЮДА>" ^
- -o client.json
+ -d "client_id=admin-cli" ^
+ -d "username=ldap-sync" ^
+ -d "password=Password123" ^
+ -d "grant_type=password"
 
 
-👉 В файле client.json ищи "id": "...." — это UUID клиента.
+В ответе будет JSON вида:
 
-3. Установить новый секрет для клиента
+{"access_token":"eyJhbGciOi...","expires_in":300,...}
 
-(замени <realm> и <client-uuid>)
 
-curl -X PUT "http://localhost:8080/auth/admin/realms/<realm>/clients/<client-uuid>/client-secret" ^
- -H "Authorization: Bearer <ВСТАВЬ_ТОКЕН_СЮДА>" ^
+Скопируйте значение access_token для последующих запросов.
+
+2️⃣ Получение списка LDAP-провайдеров в Realm
+curl -X GET "http://localhost:8080/auth/admin/realms/myrealm/user-storage" ^
+ -H "Authorization: Bearer ACCESS_TOKEN"
+
+
+ACCESS_TOKEN замените на полученный токен.
+Ответ вернёт массив объектов, где providerId = "ldap" и есть поле id — это и есть PROVIDER_ID.
+
+3️⃣ Запуск полной синхронизации LDAP
+curl -X POST "http://localhost:8080/auth/admin/realms/myrealm/user-storage/PROVIDER_ID/sync" ^
+ -H "Authorization: Bearer ACCESS_TOKEN" ^
  -H "Content-Type: application/json" ^
- -d "{\"value\":\"my-fixed-secret\"}" ^
- -o set-secret.json
+ -d "{\"action\":\"triggerFullSync\"}"
 
-
-📂 После выполнения у тебя будут такие файлы:
-
-token.json → access_token
-
-client.json → UUID клиента
-
-set-secret.json → результат замены секрета
+4️⃣ Запуск синхронизации только изменённых пользователей
+curl -X POST "http://localhost:8080/auth/admin/realms/myrealm/user-storage/PROVIDER_ID/sync" ^
+ -H "Authorization: Bearer ACCESS_TOKEN" ^
+ -H "Content-Type: application/json" ^
+ -d "{\"action\":\"triggerChangedUsersSync\"}"
