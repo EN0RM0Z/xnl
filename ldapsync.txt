@@ -110,19 +110,25 @@ sync_ldap_component() {
 
         SYNC_URL="${BASE_URL%/}/admin/realms/${REALM_NAME}/user-storage/${LDAP_ID}/sync?action=${SYNC_TYPE}"
 
-        RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$SYNC_URL" \
+ RESPONSE=$(curl -s -w "\n--- http_code=%{http_code} ---\n" -X POST "$SYNC_URL" \
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json")
 
         write_log "Сырой ответ сервера для LDAP_ID $LDAP_ID:" 
         echo "$RESPONSE" | tee -a "$LOG_FILE"
 
-        # Человекочитаемый вывод результатов
-        ADDED=$(echo "$RESPONSE" | jq -r '.added')
-        UPDATED=$(echo "$RESPONSE" | jq -r '.updated')
-        REMOVED=$(echo "$RESPONSE" | jq -r '.removed')
-        FAILED=$(echo "$RESPONSE" | jq -r '.failed')
-        STATUS=$(echo "$RESPONSE" | jq -r '.status')
+        # -------------------------------
+        # Человекочитаемый вывод результатов синхронизации
+        # -------------------------------
+
+        # Отделяем чистый JSON от http_code
+        CLEAN_JSON=$(echo "$RESPONSE" | sed '/--- http_code=/d')
+
+        ADDED=$(echo "$CLEAN_JSON" | jq -r '.added')
+        UPDATED=$(echo "$CLEAN_JSON" | jq -r '.updated')
+        REMOVED=$(echo "$CLEAN_JSON" | jq -r '.removed')
+        FAILED=$(echo "$CLEAN_JSON" | jq -r '.failed')
+        STATUS=$(echo "$CLEAN_JSON" | jq -r '.status')
 
         write_log "Результат синхронизации LDAP_ID $LDAP_ID в realm $REALM_NAME (${SYNC_NAME}):"
         write_log "  Добавлено новых пользователей: $ADDED"
@@ -131,6 +137,7 @@ sync_ldap_component() {
         write_log "  Не удалось синхронизировать: $FAILED"
         write_log "  Статус: $STATUS"
         write_log "---------------------------------------------"
+
     done
 }
 
