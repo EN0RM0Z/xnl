@@ -49,31 +49,34 @@ write_log() {
 # Функция выполнения HTTP-запроса
 # -------------------------------
 http_request() {
-    local METHOD=$1
-    local URL=$2
-    local DATA=${3:-}
+    local METHOD="$1"
+    local URL="$2"
+    local DATA="${3:-}"
     shift 3
     local HEADERS=("$@")
 
     local RESPONSE_AND_CODE
     if [[ "$METHOD" == "POST" ]]; then
         RESPONSE_AND_CODE=$(curl --silent --location \
-            --write-out "HTTPSTATUS:%{http_code}" \
-            --request POST "$URL" \
             "${HEADERS[@]}" \
-            --data "$DATA")
+            --request POST "$URL" \
+            --data "$DATA" \
+            --write-out $'\n__HTTP_STATUS__:%{http_code}')
     else
         RESPONSE_AND_CODE=$(curl --silent --location \
-            --write-out "HTTPSTATUS:%{http_code}" \
+            "${HEADERS[@]}" \
             --request GET "$URL" \
-            "${HEADERS[@]}")
+            --write-out $'\n__HTTP_STATUS__:%{http_code}')
     fi
 
-    local HTTP_CODE=${RESPONSE_AND_CODE##*HTTPSTATUS:}
-    local BODY=${RESPONSE_AND_CODE%HTTPSTATUS:*}
+    # Последняя строка — HTTP-код, всё остальное — body
+    local HTTP_CODE=$(printf '%s\n' "$RESPONSE_AND_CODE" | tail -n1 | sed 's/^__HTTP_STATUS__://')
+    local BODY=$(printf '%s\n' "$RESPONSE_AND_CODE" | sed '$d')
 
-    echo "$BODY|$HTTP_CODE"
+    # Возвращаем в том же формате "body|code"
+    printf '%s|%s' "$BODY" "$HTTP_CODE"
 }
+
 
 # -------------------------------
 # Функция получения токена для realm
