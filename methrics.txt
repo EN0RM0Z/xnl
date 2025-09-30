@@ -12,6 +12,7 @@ LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
 MAX_LINES="${MAX_LINES:-50000}"
 
 CODE="$1"
+
 MINUTES="$2"
 
 # Обработка опционального второго параметра
@@ -105,3 +106,19 @@ sudo cp keycloak_http_metrics.sh /usr/local/bin/
 sudo chmod +x /usr/local/bin/keycloak_http_metrics.sh
 sudo chown zabbix:zabbix /usr/local/bin/keycloak_http_metrics.sh
 Этот окончательный вариант поддерживает оба формата вызова и готов к использованию в production.
+===================
+
+function to_epoch(str,    d, mon, hms, tz, ts) {
+    gsub(/^\[|\]$/,"",str)
+    # str = 30/Sep/2025:19:35:02 +0300
+    split(str, a, " ")
+    tz = a[2]
+    split(a[1], b, ":")
+    split(b[1], d, "/")
+    month_str="JanFebMarAprMayJunJulAugSepOctNovDec"
+    mon = int((index(month_str, d[2])-1)/3)+1
+    ts = mktime(d[3]" "mon" "d[1]" "b[2]" "b[3]" "b[2])
+    # Можно учесть tz при желании
+    return ts
+}
+
