@@ -82,3 +82,88 @@ COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="
 END { print count+0 }')
 
 echo "${COUNT:-0}"
+
+
++++++++++++++++++++++++++++++++++++++++++
+
+#!/bin/bash
+# keycloak_http_metrics.sh
+# Подсчёт HTTP-кодов 200 и 50x в access.log Nginx (Keycloak)
+# Optimized для Zabbix
+
+set -euo pipefail
+
+# ------------------------
+# Конфигурация
+# ------------------------
+LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
+MAX_LINES="${MAX_LINES:-50000}"
+
+CODE="${1:-200}"       # "200" или "50x"
+MINUTES="${2:-5}"      # по умолчанию 5 минут
+
+# Ограничение окна анализа
+if ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || [ "$MINUTES" -lt 1 ]; then
+    MINUTES=5
+fi
+if [ "$MINUTES" -gt 1440 ]; then
+    MINUTES=1440
+fi
+
+# Проверка кода
+if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
+    echo "ERROR: Code must be 200 or 50x" >&2
+    exit 1
+fi
+
+# Быстрый выход если файл недоступен
+if [[ ! -r "$LOG_FILE" ]] || [[ ! -s "$LOG_FILE" ]]; then
+    echo "0"
+    exit 0
+fi
+
+# ------------------------
+# Время начала окна в epoch
+# ------------------------
+SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s)
+
+# ------------------------
+# Подсчёт через awk
+# ------------------------
+COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
+function to_epoch(str,    d,t,mon,month,tz,sign,h,min,off) {
+    # str = 21/Mar/2025:09:51:30 +0500
+    gsub(/\[|\]/,"",str)
+    split(str, a, "[:/ ]")
+    day=a[1]; mon=a[2]; year=a[3]; t_h=a[4]; t_m=a[5]; t_s=a[6]; tz=a[7]
+    month="JanFebMarAprMayJunJulAugSepOctNovDec"
+    m = index(month, mon)/3 + 1
+    h = substr(tz,2,2)+0
+    min = substr(tz,4,2)+0
+    sign = substr(tz,1,1)
+    off = (h*3600+min*60)
+    if(sign=="-") off=-off
+    return mktime(year" "m" "day" "t_h" "t_m" "t_s) - off
+}
+{
+    # Пропуск строк с недостаточным количеством полей
+    if(NF<9) next
+
+    # Время строки
+    time_str = $4 " " $5
+    log_epoch = to_epoch(time_str)
+
+    # Извлекаем код ответа
+    split($0,a,"\"")
+    split(a[3],b," ")
+    code_num = b[2]+0
+
+    # Счёт только для нужного окна времени и нужного кода
+    if(log_epoch >= since) {
+        if((code=="200" && code_num==200) || (code=="50x" && code_num>=500 && code_num<600)) count++
+    }
+}
+END { print count+0 }
+')
+
+echo "${COUNT:-0}"
