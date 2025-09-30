@@ -167,3 +167,169 @@ END { print count+0 }
 ')
 
 echo "${COUNT:-0}"
+
+
+0000000000000000000000000000000000000000000
+
+#!/bin/bash
+# keycloak_http_metrics_debug.sh
+# Отладочная версия для диагностики
+
+set -euo pipefail
+
+LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
+MAX_LINES="${MAX_LINES:-1000}"  # Уменьшаем для отладки
+
+CODE="$1"
+MINUTES="${2:-5}"
+
+# Временно разрешаем все коды для отладки
+#if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
+#    echo "ERROR: Code must be 200 or 50x" >&2
+#    exit 1
+#fi
+
+if [[ ! -r "$LOG_FILE" ]]; then
+    echo "ERROR: Cannot read log file: $LOG_FILE" >&2
+    exit 1
+fi
+
+SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s)
+echo "Debug: Since epoch: $SINCE_EPOCH (last $MINUTES minutes)" >&2
+
+# Анализируем первые несколько строк
+echo "Debug: First 3 lines of log:" >&2
+head -n 3 "$LOG_FILE" | while IFS= read -r line; do
+    echo "Debug: $line" >&2
+done
+
+COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
+{
+    print "Debug: Processing line: " NR " Fields: " NF > "/dev/stderr"
+    for (i=1; i<=NF; i++) {
+        print "Debug: Field " i ": " $i > "/dev/stderr"
+    }
+    
+    if (NF >= 9) {
+        status = $9
+        print "Debug: Extracted status: " status > "/dev/stderr"
+        
+        if (status == code) {
+            print "Debug: MATCH found for code: " code > "/dev/stderr"
+            count++
+        }
+    }
+}
+END { 
+    print "Debug: Total matches: " count+0 > "/dev/stderr"
+    print count+0 
+}')
+
+echo "Result: $COUNT"
+
+999999999999999999999999999999999999999999999
+
+#!/bin/bash
+# keycloak_http_metrics.sh
+# Подсчёт HTTP-кодов 200 и 50x в access.log Nginx (Keycloak)
+# Исправленная версия для реального формата лога
+
+set -euo pipefail
+
+# ------------------------
+# Конфигурация
+# ------------------------
+LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
+MAX_LINES="${MAX_LINES:-50000}"
+
+CODE="$1"
+MINUTES="$2"
+
+# Обработка опционального второго параметра
+if [[ -z "$MINUTES" ]] || ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || [ "$MINUTES" -lt 1 ]; then
+    MINUTES=5
+fi
+
+if [ "$MINUTES" -gt 1440 ]; then
+    MINUTES=1440
+fi
+
+# ------------------------
+# Валидация параметров
+# ------------------------
+if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
+    echo "ERROR: Code must be 200 or 50x" >&2
+    exit 1
+fi
+
+# Быстрый выход если файл недоступен
+if [[ ! -r "$LOG_FILE" ]] || [[ ! -s "$LOG_FILE" ]]; then
+    echo "0"
+    exit 0
+fi
+
+# ------------------------
+# Время начала окна в epoch
+# ------------------------
+SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s)
+
+# ------------------------
+# Подсчёт через awk с исправлениями
+# ------------------------
+COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
+function to_epoch(str,    datetime, d, t, m, month, tz, sign, h, min, off) {
+    # Удаляем квадратные скобки
+    gsub(/^\[|\]$/, "", str)
+    
+    # Разделяем дату/время и временную зону
+    split(str, parts, " ")
+    datetime = parts[1]
+    tz = parts[2]
+    
+    # Парсим основную дату и время
+    split(datetime, dt, ":")
+    split(dt[1], d, "/")
+    
+    # Преобразуем месяц
+    month_map["Jan"] = 1; month_map["Feb"] = 2; month_map["Mar"] = 3;
+    month_map["Apr"] = 4; month_map["May"] = 5; month_map["Jun"] = 6;
+    month_map["Jul"] = 7; month_map["Aug"] = 8; month_map["Sep"] = 9;
+    month_map["Oct"] = 10; month_map["Nov"] = 11; month_map["Dec"] = 12;
+    
+    month_num = month_map[d[2]]
+    if (!month_num) return 0
+    
+    # Обрабатываем временную зону
+    sign = substr(tz, 1, 1)
+    h = substr(tz, 2, 2) + 0
+    min = substr(tz, 4, 2) + 0
+    off = (h * 3600 + min * 60) * (sign == "+" ? 1 : -1)
+    
+    # Создаем временную метку (предполагаем, что системное время в UTC)
+    timestamp = mktime(d[3] " " month_num " " d[1] " " dt[2] " " dt[3] " " dt[4]) - off
+    return (timestamp > 0) ? timestamp : 0
+}
+
+{
+    # Пропускаем строки с недостаточным количеством полей
+    if (NF < 12) next
+    
+    # Извлекаем HTTP статус - в вашем формате это поле после User-Agent
+    # Формат: IP - - [time] "request" status size "referer" "user_agent" ДОПОЛНИТЕЛЬНЫЕ_ПОЛЯ
+    # Статус находится в поле $9
+    status = $9
+    
+    # Проверяем, что статус - трехзначное число
+    if (status ~ /^[0-9]{3}$/) {
+        log_epoch = to_epoch($4 " " $5)
+        if (log_epoch >= since) {
+            if (code == "200" && status == "200") count++
+            else if (code == "50x" && status ~ /^5[0-9][0-9]$/) count++
+        }
+    }
+}
+END { print count+0 }
+')
+
+echo "${COUNT:-0}"
+
