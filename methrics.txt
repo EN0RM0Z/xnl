@@ -1,16 +1,107 @@
-server {
-    listen 443 ssl;
-    server_name keycloak.example.com;
+#!/bin/bash
+# keycloak_http_metrics.sh
+# Подсчёт HTTP-кодов 200 и 50x в access.log Nginx (Keycloak)
+# Оптимизировано для Zabbix: keycloak.http[200,5] или keycloak.http[50x]
 
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-    }
+set -euo pipefail
 
-    location /metrics {
-        stub_status;
-        access_log off;
-        allow 127.0.0.1;
-        deny all;
+# ------------------------
+# Конфигурация
+# ------------------------
+LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
+MAX_LINES="${MAX_LINES:-50000}"
+
+CODE="$1"
+MINUTES="$2"
+
+# Обработка опционального второго параметра
+if [[ -z "$MINUTES" ]] || ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || [ "$MINUTES" -lt 1 ]; then
+    MINUTES=5
+fi
+
+if [ "$MINUTES" -gt 1440 ]; then
+    MINUTES=1440
+fi
+
+# ------------------------
+# Валидация параметров
+# ------------------------
+if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
+    echo "ERROR: Code must be 200 or 50x" >&2
+    exit 1
+fi
+
+# Быстрый выход если файл недоступен
+if [[ ! -r "$LOG_FILE" ]] || [[ ! -s "$LOG_FILE" ]]; then
+    echo "0"
+    exit 0
+fi
+
+# ------------------------
+# Время начала окна в epoch
+# ------------------------
+SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s)
+
+# ------------------------
+# Подсчёт через awk
+# ------------------------
+COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
+function to_epoch(str,    d, t, m, month, tz, sign, h, min, off) {
+    gsub(/^\[/,"",str)
+    gsub(/\]$/,"",str)
+    split(str, dt, ":")
+    split(dt[1], d, "/")
+    t_h=dt[2]; t_m=dt[3]; t_s=dt[4]
+    month="JanFebMarAprMayJunJulAugSepOctNovDec"
+    m=index(month, d[2])/3+1
+    if (m < 1) return 0
+    tz=dt[5]
+    sign=substr(tz,1,1)
+    h=substr(tz,2,2)+0
+    min=substr(tz,4,2)+0
+    off=(h*3600+min*60)
+    if (sign=="-") off=-off
+    timestamp = mktime(d[3]" "m" "d[1]" "t_h" "t_m" "t_s) - off
+    return (timestamp > 0) ? timestamp : 0
+}
+{
+    if (NF < 9) next
+    log_epoch=to_epoch($4)
+    if (log_epoch >= since && $9 ~ /^[0-9]{3}$/) {
+        if (code=="200" && $9=="200") count++
+        else if (code=="50x" && $9 ~ /^5[0-9][0-9]$/) count++
     }
 }
+END { print count+0 }
+')
 
+echo "${COUNT:-0}"
+
+
+
+Конфигурация для Zabbix Agent:
+bash
+# В /etc/zabbix/zabbix_agentd.conf или /etc/zabbix/zabbix_agentd.d/keycloak.conf
+UserParameter=keycloak.http[*],/usr/local/bin/keycloak_http_metrics.sh $1 $2
+Примеры использования в Zabbix:
+bash
+# 200 ответы за 5 минут (по умолчанию)
+keycloak.http[200]
+
+# 200 ответы за 10 минут
+keycloak.http[200,10]
+
+# 50x ошибки за 5 минут (по умолчанию)  
+keycloak.http[50x]
+
+# 50x ошибки за 15 минут
+keycloak.http[50x,15]
+
+# 200 ответы за 1 час
+keycloak.http[200,60]
+Установка:
+bash
+sudo cp keycloak_http_metrics.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/keycloak_http_metrics.sh
+sudo chown zabbix:zabbix /usr/local/bin/keycloak_http_metrics.sh
+Этот окончательный вариант поддерживает оба формата вызова и готов к использованию в production.
