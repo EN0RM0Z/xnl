@@ -1,7 +1,7 @@
 #!/bin/bash
 # keycloak_http_metrics.sh
 # Подсчёт HTTP-кодов 200 и 50x в access.log Nginx (Keycloak)
-# Оптимизировано для Zabbix: keycloak.http[200,5] или keycloak.http[50x]
+# Улучшенная версия с повышенной переносимостью и точностью
 
 set -euo pipefail
 
@@ -11,325 +11,162 @@ set -euo pipefail
 LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
 MAX_LINES="${MAX_LINES:-50000}"
 
-CODE="$1"
+CODE="${1:-200}"
 MINUTES="${2:-5}"
-
-# Обработка опционального второго параметра
-if [[ -z "$MINUTES" ]] || ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || [ "$MINUTES" -lt 1 ]; then
-    MINUTES=5
-fi
-
-if [ "$MINUTES" -gt 1440 ]; then
-    MINUTES=1440
-fi
 
 # ------------------------
 # Валидация параметров
 # ------------------------
-if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
-    echo "ERROR: Code must be 200 or 50x" >&2
-    exit 1
-fi
-
-# Быстрый выход если файл недоступен
-if [[ ! -r "$LOG_FILE" ]] || [[ ! -s "$LOG_FILE" ]]; then
-    echo "0"
-    exit 0
-fi
-
-# ------------------------
-# Время начала окна в epoch
-# ------------------------
-SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s)
-
-# ------------------------
-# Функция для преобразования даты Nginx в epoch
-# ------------------------
-to_epoch_awk='
-function to_epoch(str,    d, t_h, t_m, t_s, month_str, m, tz, sign, h, min, off, timestamp) {
-    gsub(/^\[|\]$/,"",str)
-    split(str, dt, ":")
-    split(dt[1], d, "/")
-    t_h = dt[2]; t_m = dt[3]; t_s = dt[4]
-    month_str = "JanFebMarAprMayJunJulAugSepOctNovDec"
-    m = int((index(month_str, d[2])-1)/3)+1
-    if (m<1) return 0
-    tz = dt[5]
-    sign = substr(tz,1,1)
-    h = substr(tz,2,2)+0
-    min = substr(tz,4,2)+0
-    off = (h*3600 + min*60)
-    if (sign=="-") off = -off
-    timestamp = mktime(d[3]" "m" "d[1]" "t_h" "t_m" "t_s) - off
-    return (timestamp>0) ? timestamp : 0
-}'
-
-# ------------------------
-# Подсчёт через awk
-# ------------------------
-COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" "$to_epoch_awk" '
-{
-    if (NF<9) next
-    log_epoch = to_epoch($4 " " $5)
-    if (log_epoch >= since) {
-        # Разбор по кавычкам, чтобы корректно взять HTTP-код
-        split($0,a,"\"")
-        split(a[3],b," ")
-        code_num = b[2]+0
-        if ((code=="200" && code_num==200) || (code=="50x" && code_num>=500 && code_num<600)) count++
-    }
-}
-END { print count+0 }')
-
-echo "${COUNT:-0}"
-
-
-+++++++++++++++++++++++++++++++++++++++++
-
-#!/bin/bash
-# keycloak_http_metrics.sh
-# Подсчёт HTTP-кодов 200 и 50x в access.log Nginx (Keycloak)
-# Optimized для Zabbix
-
-set -euo pipefail
-
-# ------------------------
-# Конфигурация
-# ------------------------
-LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
-MAX_LINES="${MAX_LINES:-50000}"
-
-CODE="${1:-200}"       # "200" или "50x"
-MINUTES="${2:-5}"      # по умолчанию 5 минут
-
-# Ограничение окна анализа
 if ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || [ "$MINUTES" -lt 1 ]; then
+    echo "WARNING: MINUTES set to default 5" >&2
     MINUTES=5
-fi
-if [ "$MINUTES" -gt 1440 ]; then
+elif [ "$MINUTES" -gt 1440 ]; then
+    echo "WARNING: MINUTES capped at 1440 (24 hours)" >&2
     MINUTES=1440
 fi
 
-# Проверка кода
 if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
     echo "ERROR: Code must be 200 or 50x" >&2
     exit 1
 fi
 
-# Быстрый выход если файл недоступен
-if [[ ! -r "$LOG_FILE" ]] || [[ ! -s "$LOG_FILE" ]]; then
+# Проверка доступности файла
+if [[ ! -f "$LOG_FILE" ]]; then
     echo "0"
     exit 0
 fi
-
-# ------------------------
-# Время начала окна в epoch
-# ------------------------
-SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s)
-
-# ------------------------
-# Подсчёт через awk
-# ------------------------
-COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
-function to_epoch(str,    d,t,mon,month,tz,sign,h,min,off) {
-    # str = 21/Mar/2025:09:51:30 +0500
-    gsub(/\[|\]/,"",str)
-    split(str, a, "[:/ ]")
-    day=a[1]; mon=a[2]; year=a[3]; t_h=a[4]; t_m=a[5]; t_s=a[6]; tz=a[7]
-    month="JanFebMarAprMayJunJulAugSepOctNovDec"
-    m = index(month, mon)/3 + 1
-    h = substr(tz,2,2)+0
-    min = substr(tz,4,2)+0
-    sign = substr(tz,1,1)
-    off = (h*3600+min*60)
-    if(sign=="-") off=-off
-    return mktime(year" "m" "day" "t_h" "t_m" "t_s) - off
-}
-{
-    # Пропуск строк с недостаточным количеством полей
-    if(NF<9) next
-
-    # Время строки
-    time_str = $4 " " $5
-    log_epoch = to_epoch(time_str)
-
-    # Извлекаем код ответа
-    split($0,a,"\"")
-    split(a[3],b," ")
-    code_num = b[2]+0
-
-    # Счёт только для нужного окна времени и нужного кода
-    if(log_epoch >= since) {
-        if((code=="200" && code_num==200) || (code=="50x" && code_num>=500 && code_num<600)) count++
-    }
-}
-END { print count+0 }
-')
-
-echo "${COUNT:-0}"
-
-
-0000000000000000000000000000000000000000000
-
-#!/bin/bash
-# keycloak_http_metrics_debug.sh
-# Отладочная версия для диагностики
-
-set -euo pipefail
-
-LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
-MAX_LINES="${MAX_LINES:-1000}"  # Уменьшаем для отладки
-
-CODE="$1"
-MINUTES="${2:-5}"
-
-# Временно разрешаем все коды для отладки
-#if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
-#    echo "ERROR: Code must be 200 or 50x" >&2
-#    exit 1
-#fi
 
 if [[ ! -r "$LOG_FILE" ]]; then
     echo "ERROR: Cannot read log file: $LOG_FILE" >&2
-    exit 1
+    echo "0"
+    exit 0
 fi
 
-SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s)
-echo "Debug: Since epoch: $SINCE_EPOCH (last $MINUTES minutes)" >&2
-
-# Анализируем первые несколько строк
-echo "Debug: First 3 lines of log:" >&2
-head -n 3 "$LOG_FILE" | while IFS= read -r line; do
-    echo "Debug: $line" >&2
-done
-
-COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
-{
-    print "Debug: Processing line: " NR " Fields: " NF > "/dev/stderr"
-    for (i=1; i<=NF; i++) {
-        print "Debug: Field " i ": " $i > "/dev/stderr"
-    }
-    
-    if (NF >= 9) {
-        status = $9
-        print "Debug: Extracted status: " status > "/dev/stderr"
-        
-        if (status == code) {
-            print "Debug: MATCH found for code: " code > "/dev/stderr"
-            count++
-        }
-    }
-}
-END { 
-    print "Debug: Total matches: " count+0 > "/dev/stderr"
-    print count+0 
-}')
-
-echo "Result: $COUNT"
-
-999999999999999999999999999999999999999999999
-
-#!/bin/bash
-# keycloak_http_metrics.sh
-# Подсчёт HTTP-кодов 200 и 50x в access.log Nginx (Keycloak)
-# Исправленная версия для реального формата лога
-
-set -euo pipefail
-
-# ------------------------
-# Конфигурация
-# ------------------------
-LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
-MAX_LINES="${MAX_LINES:-50000}"
-
-CODE="$1"
-MINUTES="$2"
-
-# Обработка опционального второго параметра
-if [[ -z "$MINUTES" ]] || ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || [ "$MINUTES" -lt 1 ]; then
-    MINUTES=5
-fi
-
-if [ "$MINUTES" -gt 1440 ]; then
-    MINUTES=1440
-fi
-
-# ------------------------
-# Валидация параметров
-# ------------------------
-if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
-    echo "ERROR: Code must be 200 or 50x" >&2
-    exit 1
-fi
-
-# Быстрый выход если файл недоступен
-if [[ ! -r "$LOG_FILE" ]] || [[ ! -s "$LOG_FILE" ]]; then
+# Быстрый выход для пустого файла
+if [[ ! -s "$LOG_FILE" ]]; then
     echo "0"
     exit 0
 fi
 
 # ------------------------
-# Время начала окна в epoch
+# Время начала окна в epoch (улучшенная версия)
 # ------------------------
-SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s)
+SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s 2>/dev/null || echo "0")
+if [[ "$SINCE_EPOCH" == "0" ]]; then
+    # Универсальный запасной вариант
+    if command -v date >/dev/null 2>&1; then
+        SINCE_EPOCH=$(( $(date +%s) - MINUTES * 60 ))
+    else
+        echo "ERROR: Cannot calculate timestamp" >&2
+        echo "0"
+        exit 0
+    fi
+fi
 
 # ------------------------
-# Подсчёт через awk с исправлениями
+# Основная обработка через awk
 # ------------------------
-COUNT=$(tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
-function to_epoch(str,    datetime, d, t, m, month, tz, sign, h, min, off) {
-    # Удаляем квадратные скобки
-    gsub(/^\[|\]$/, "", str)
+COUNT=$(LC_ALL=C tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
+BEGIN {
+    month_map["Jan"]=1; month_map["Feb"]=2; month_map["Mar"]=3
+    month_map["Apr"]=4; month_map["May"]=5; month_map["Jun"]=6
+    month_map["Jul"]=7; month_map["Aug"]=8; month_map["Sep"]=9
+    month_map["Oct"]=10; month_map["Nov"]=11; month_map["Dec"]=12
     
-    # Разделяем дату/время и временную зону
-    split(str, parts, " ")
-    datetime = parts[1]
-    tz = parts[2]
-    
-    # Парсим основную дату и время
+    since_valid = (since != 0)
+    error_count = 0
+}
+
+# Функция проверки високосного года
+function is_leap_year(year) {
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+# Функция преобразования даты в epoch (улучшенная)
+function to_epoch(datestr,    parts, datetime, tz, dt, date_parts, d, mon, y, H, M, S, m, sign, h, min, off, timestamp, days_in_month) {
+    if (datestr == "") return 0
+
+    gsub(/^\[|\]$/, "", datestr)
+    split(datestr, parts, " ")
+    if (length(parts) < 2) return 0
+
+    datetime = parts[1]; tz = parts[2]
+
+    if (tz !~ /^[+-][0-9]{4}$/) return 0
+
     split(datetime, dt, ":")
-    split(dt[1], d, "/")
+    if (length(dt) < 4) return 0
+
+    split(dt[1], date_parts, "/")
+    if (length(date_parts) < 3) return 0
+
+    d = date_parts[1] + 0; mon = date_parts[2]; y = date_parts[3] + 0
+    H = dt[2] + 0; M = dt[3] + 0; S = dt[4] + 0
+
+    m = month_map[mon]
+    if (!m) return 0
+
+    # Улучшенная проверка даты
+    if (m < 1 || m > 12) return 0
+    if (y < 1970 || y > 2100) return 0  # Разумные границы года
     
-    # Преобразуем месяц
-    month_map["Jan"] = 1; month_map["Feb"] = 2; month_map["Mar"] = 3;
-    month_map["Apr"] = 4; month_map["May"] = 5; month_map["Jun"] = 6;
-    month_map["Jul"] = 7; month_map["Aug"] = 8; month_map["Sep"] = 9;
-    month_map["Oct"] = 10; month_map["Nov"] = 11; month_map["Dec"] = 12;
+    # Точное определение дней в месяце
+    days_in_month = 31
+    if (m == 4 || m == 6 || m == 9 || m == 11) days_in_month = 30
+    else if (m == 2) days_in_month = is_leap_year(y) ? 29 : 28
     
-    month_num = month_map[d[2]]
-    if (!month_num) return 0
-    
-    # Обрабатываем временную зону
+    if (d < 1 || d > days_in_month) return 0
+    if (H < 0 || H > 23 || M < 0 || M > 59 || S < 0 || S > 59) return 0
+
+    # Расчет временного смещения
     sign = substr(tz, 1, 1)
     h = substr(tz, 2, 2) + 0
     min = substr(tz, 4, 2) + 0
-    off = (h * 3600 + min * 60) * (sign == "+" ? 1 : -1)
     
-    # Создаем временную метку (предполагаем, что системное время в UTC)
-    timestamp = mktime(d[3] " " month_num " " d[1] " " dt[2] " " dt[3] " " dt[4]) - off
-    return (timestamp > 0) ? timestamp : 0
+    # Проверка корректности смещения
+    if (h > 23 || min > 59) return 0
+    
+    off = (h * 3600 + min * 60) * (sign == "+" ? 1 : -1)
+
+    timestamp = mktime(y " " m " " d " " H " " M " " S) - off
+    return (timestamp > 0 && timestamp < 2^31) ? timestamp : 0
 }
 
 {
-    # Пропускаем строки с недостаточным количеством полей
-    if (NF < 12) next
-    
-    # Извлекаем HTTP статус - в вашем формате это поле после User-Agent
-    # Формат: IP - - [time] "request" status size "referer" "user_agent" ДОПОЛНИТЕЛЬНЫЕ_ПОЛЯ
-    # Статус находится в поле $9
-    status = $9
-    
-    # Проверяем, что статус - трехзначное число
-    if (status ~ /^[0-9]{3}$/) {
-        log_epoch = to_epoch($4 " " $5)
-        if (log_epoch >= since) {
-            if (code == "200" && status == "200") count++
-            else if (code == "50x" && status ~ /^5[0-9][0-9]$/) count++
-        }
+    # Пропуск строк с недостаточным количеством полей
+    if (NF < 5) {
+        error_count++
+        next
     }
+
+    status = $5
+
+    # Быстрая проверка первой цифры статуса
+    if (code == "200" && substr(status, 1, 1) != "2") next
+    else if (code == "50x" && substr(status, 1, 1) != "5") next
+
+    # Полная проверка статуса
+    if (status !~ /^[0-9]{3}$/) next
+    if (code == "200" && status != "200") next
+    else if (code == "50x" && status !~ /^5[0-9][0-9]$/) next
+
+    # Проверка и парсинг даты
+    if ($3 !~ /^\[[0-9]{2}\/[A-Za-z]{3}\/[0-9]{4}:/) next
+    
+    log_epoch = to_epoch($3)
+    if (log_epoch == 0) next
+
+    # Подсчет подходящих строк
+    if (!since_valid || log_epoch >= since) count++
 }
-END { print count+0 }
-')
+END { 
+    if (error_count > 0) {
+        print "DEBUG: Skipped " error_count " invalid lines" > "/dev/stderr"
+    }
+    print count + 0 
+}' 2>>/var/log/keycloak_metrics_errors.log || echo "0")
 
+# ------------------------
+# Вывод результата
+# ------------------------
 echo "${COUNT:-0}"
-
