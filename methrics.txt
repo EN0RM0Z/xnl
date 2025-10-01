@@ -152,3 +152,84 @@ END {
 
 echo "${COUNT:-0}"
 
+
+
+++++++++++++++++++++++++++++++++++++++
+
+
+1️⃣ Создание скрипта
+
+Открываем терминал на сервере с Zabbix Agent.
+
+Переходим в папку для пользовательских скриптов. Обычно это /usr/local/bin или /etc/zabbix/scripts (если такой нет — можно создать):
+
+sudo mkdir -p /etc/zabbix/scripts
+cd /etc/zabbix/scripts
+
+
+Создаём скрипт с помощью nano:
+
+sudo nano check_302.sh
+
+
+Вставляем содержимое скрипта, например, для подсчёта строк с " 302 " в файле или архиве .gz:
+
+#!/bin/bash
+
+# файл передаётся как первый аргумент
+FILE="$1"
+
+if [[ "$FILE" == *.gz ]]; then
+    zgrep -c " 302 " "$FILE"
+else
+    grep -c " 302 " "$FILE"
+fi
+
+
+Сохраняем и выходим из nano: Ctrl+O, Enter, Ctrl+X.
+
+2️⃣ Установка прав и владельца
+
+Делаем скрипт исполняемым:
+
+sudo chmod 755 /etc/zabbix/scripts/check_302.sh
+
+
+Назначаем владельца zabbix (обычно агент работает под этим пользователем):
+
+sudo chown zabbix:zabbix /etc/zabbix/scripts/check_302.sh
+
+3️⃣ Настройка Zabbix Agent
+
+Открываем конфиг агента, обычно /etc/zabbix/zabbix_agentd.conf:
+
+sudo nano /etc/zabbix/zabbix_agentd.conf
+
+
+Добавляем строку UserParameter:
+
+UserParameter=check.302[*],/etc/zabbix/scripts/check_302.sh $1
+
+
+check.302[*] — ключ, который будет использоваться в Zabbix
+
+$1 — параметр, который передастся в скрипт (например, путь к файлу или архиву)
+
+Сохраняем файл и выходим.
+
+4️⃣ Перезапуск агента
+
+После изменения конфигурации необходимо перезапустить Zabbix Agent:
+
+sudo systemctl restart zabbix-agent
+sudo systemctl status zabbix-agent
+
+5️⃣ Проверка работы
+
+Можно проверить локально на сервере, что UserParameter работает:
+
+zabbix_agentd -t "check.302[/var/log/nginx/access.log]"
+
+
+Вывод должен показать количество строк с " 302 ".
+
