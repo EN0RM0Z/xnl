@@ -1,102 +1,33 @@
 #!/bin/bash
 #
-# Скрипт для подсчёта количества HTTP-кодов в access.log Nginx
-# Используется формат:
-#   '$remote_addr - $remote_user [$time_local] "$request" '
-#   '$status $body_bytes_sent "$http_referer" '
-#   '"$http_user_agent" "$http_x_forwarded_for"'
-#
-# Автор: ...
+# Отладочная версия: показывает первые 5 полей access.log
 #
 
-# === Конфигурация ===
-LOG_FILE="${LOG_FILE:-/var/log/nginx/access.log}"   # путь к логу
-MAX_LINES="${MAX_LINES:-50000}"                     # макс. строк на обработку
-DEBUG="${DEBUG:-0}"                                 # 1 = печатать отладку
-ERR_LOG="/var/log/keycloak_metrics_errors.log"
+LOG_FILE="${LOG_FILE:-/var/log/nginx/access.log}"
+MAX_LINES="${MAX_LINES:-20}"
 
-# === Функции ===
-log_debug() {
-  if [ "$DEBUG" -eq 1 ]; then
-    echo "[DEBUG] $*" >&2
-  fi
-}
-
-log_error() {
-  echo "[ERROR] $*" >&2
-  echo "$(date '+%F %T') [ERROR] $*" >> "$ERR_LOG"
-}
-
-# Перевод даты nginx в epoch
-to_epoch() {
-  # Пример входа: 30/Sep/2025:12:05:43 +0500
-  local t="$1"
-  date -d "${t}" +%s 2>/dev/null
-}
-
-# === Основная логика ===
-since=$(date -d "24 hours ago" +%s)
-
-count=$(tail -n "$MAX_LINES" "$LOG_FILE" 2>/dev/null | \
-awk -v since="$since" -v DEBUG="$DEBUG" -v ERR_LOG="$ERR_LOG" '
-function log_debug(msg) {
-  if (DEBUG == 1) {
-    print "[DEBUG] " msg > "/dev/stderr"
-  }
-}
-function log_error(msg) {
-  print "[ERROR] " msg > "/dev/stderr"
-  cmd = "echo \"" strftime("%F %T") " [ERROR] " msg "\" >> " ERR_LOG
-  system(cmd)
-}
-
-function to_epoch(str,   cmd, out) {
-  # преобразуем дату вида 30/Sep/2025:12:05:43 +0500
-  gsub("/", " ", str)
-  cmd = "date -d \"" str "\" +%s"
-  cmd | getline out
-  close(cmd)
-  return out
-}
-
+tail -n "$MAX_LINES" "$LOG_FILE" | \
+awk '
 {
-  # Разбиваем по кавычкам: a[2] = request, a[3] = всё после запроса
+  # Разбиваем по кавычкам (3 части минимум)
   split($0, a, "\"")
 
-  # --- Извлекаем дату ---
-  time_str = ""
-  if (match(a[1], /\[([^\]]+)\]/, t)) {
-    time_str = t[1]
-  } else {
-    log_error("Не удалось извлечь дату из: " a[1])
-    next
-  }
-  log_epoch = to_epoch(time_str)
+  # 1) Первая часть: addr - user [time]
+  split(a[1], p1, " ")
 
-  # --- Извлекаем статус ---
-  status = ""
-  split(a[3], after, " ")
-  for (i=1; i<=length(after); i++) {
-    if (after[i] ~ /^[0-9]{3}$/) {
-      status = after[i]
-      break
-    }
-  }
+  remote_addr = p1[1]
+  remote_user = p1[3]  # обычно "-"
+  time_str   = substr(a[1], index(a[1], "[")+1, index(a[1], "]")-index(a[1], "[")-1)
 
-  if (status == "") {
-    log_error("Не удалось найти статус в строке: " $0)
-    next
-  }
+  request    = a[2]
 
-  # --- Фильтрация по времени и статусу ---
-  if (log_epoch >= since && status == 200) {
-    count++
-  }
+  # 2) После запроса идут: статус, размер и т.п.
+  split(a[3], p2, " ")
+  status = p2[2]
 
-  log_debug("time=" time_str " epoch=" log_epoch " status=" status)
+  # Выводим первые 5 "полей"
+  print "1:", remote_addr, " 2:", remote_user, " 3:", "[" time_str "]", \
+        " 4:", "\"" request "\"", " 5:", status
 }
-END { print count+0 }
-')
-
-echo "$count"
+'
 
