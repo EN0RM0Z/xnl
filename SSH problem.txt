@@ -1,0 +1,78 @@
+Логи SSH при попытке входа
+sudo tail -f /var/log/secure
+# или на systemd-системах
+sudo journalctl -u sshd -f
+
+
+Попробуйте войти пользователем в другой терминал.
+
+Смотрите сообщения: Failed password, PAM account, not in AllowGroups.
+
+2️⃣ Проверка разрешения пользователя и групп
+# Проверка информации о пользователе
+id username@domain
+
+# Проверка того, что пользователь виден в passwd
+getent passwd username@domain
+
+# Проверка группы, через которую разрешён доступ
+getent group "имя_группы_с_доступом"
+
+
+✅ Убедитесь, что id показывает нужную группу, а getent passwd выводит строку пользователя.
+
+3️⃣ Проверка домашней директории
+# Определяем домашнюю директорию
+getent passwd username@domain | cut -d: -f6
+
+# Проверяем её существование
+ls -ld $(getent passwd username@domain | cut -d: -f6)
+
+
+⚠ Если директории нет — PAM может блокировать вход.
+
+4️⃣ Проверка и очистка кеша SSSD
+sudo sss_cache -E
+sudo systemctl restart sssd
+
+# Проверка пользователя после очистки кеша
+id username@domain
+
+
+✅ После очистки кеша и перезапуска SSSD id должен корректно показывать группы.
+
+5️⃣ Проверка PAM и ограничений доступа
+# Проверка access.conf
+grep -v '^#' /etc/security/access.conf
+
+# Проверка sshd_config на ограничения
+grep -i 'AllowUsers\|AllowGroups' /etc/ssh/sshd_config
+
+
+⚠ Убедитесь, что пользователя или его группы не блокирует PAM/sshd.
+
+6️⃣ Проверка формата логина
+
+Попробуйте несколько вариантов логина при входе по SSH или через PuTTY:
+
+username@server
+username@DOMAIN.LOCAL@server
+DOMAIN\username@server
+
+
+✅ Иногда сервер ждёт формат user@domain вместо просто user.
+
+7️⃣ Проверка Kerberos (если GSSAPI включён)
+klist
+
+
+Если тикета нет, sshd может падать на пароль.
+
+Попробовать получить тикет вручную:
+
+kinit username@DOMAIN.LOCAL
+
+8️⃣ SELinux (редко)
+getenforce
+# Если включён, смотрим последние AVC-записи
+sudo ausearch -m avc -ts recent
