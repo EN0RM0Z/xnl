@@ -1,33 +1,49 @@
 #!/bin/bash
-#
-# Отладочная версия: показывает первые 5 полей access.log
-#
 
-LOG_FILE="${LOG_FILE:-/var/log/nginx/access.log}"
+LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
 MAX_LINES="${MAX_LINES:-20}"
 
 tail -n "$MAX_LINES" "$LOG_FILE" | \
 awk '
 {
-  # Разбиваем по кавычкам (3 части минимум)
-  split($0, a, "\"")
+    # Пример строки:
+    # 192.168.1.10 - - [01/Oct/2025:07:25:03 +0300] "POST /realms/... HTTP/1.1" 200 2514
 
-  # 1) Первая часть: addr - user [time]
-  split(a[1], p1, " ")
+    # Первое поле — адрес
+    remote_addr = $1
 
-  remote_addr = p1[1]
-  remote_user = p1[3]  # обычно "-"
-  time_str   = substr(a[1], index(a[1], "[")+1, index(a[1], "]")-index(a[1], "[")-1)
+    # Второе поле — remote_user (может быть "-")
+    remote_user = $3   # смещение из-за того, что после addr идёт "-"
 
-  request    = a[2]
+    # Время в квадратных скобках: поля 4 и 5
+    time_str = $4 " " $5
+    gsub(/^\[|\]$/, "", time_str)
 
-  # 2) После запроса идут: статус, размер и т.п.
-  split(a[3], p2, " ")
-  status = p2[2]
+    # Вырезаем request (между кавычками)
+    n = match($0, /\"[^\"]+\"/)
+    if (n > 0) {
+        request = substr($0, RSTART+1, RLENGTH-2)
+    } else {
+        request = "-"
+    }
 
-  # Выводим первые 5 "полей"
-  print "1:", remote_addr, " 2:", remote_user, " 3:", "[" time_str "]", \
-        " 4:", "\"" request "\"", " 5:", status
-}
-'
+    # После кавычек идёт статус и размер
+    after = substr($0, RSTART+RLENGTH)
+    split(after, p, " ")
+    status = ""
+    for (i=1; i<=length(p); i++) {
+        if (p[i] != "") {
+            status = p[i]
+            break
+        }
+    }
+
+    # Печатаем 5 полей
+    print "1:", remote_addr, \
+          "2:", remote_user, \
+          "3:[" time_str "]", \
+          "4:\"" request "\"", \
+          "5:", status
+}'
+
 
