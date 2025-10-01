@@ -1,25 +1,122 @@
 #!/bin/bash
+# keycloak_http_metrics.sh
+# Подсчёт HTTP-кодов 200 и 50x в access.log Nginx (Keycloak)
+# Устойчивый разбор формата access.log
 
+set -euo pipefail
+
+# ------------------------
+# Конфигурация
+# ------------------------
 LOG_FILE="${LOG_FILE:-/var/log/nginx/keycloak.access.log}"
-MAX_LINES="${MAX_LINES:-20}"
+MAX_LINES="${MAX_LINES:-50000}"
 
-tail -n "$MAX_LINES" "$LOG_FILE" | \
-awk '
+CODE="${1:-200}"
+MINUTES="${2:-5}"
+
+# ------------------------
+# Валидация параметров
+# ------------------------
+if ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || [ "$MINUTES" -lt 1 ]; then
+    echo "WARNING: MINUTES set to default 5" >&2
+    MINUTES=5
+elif [ "$MINUTES" -gt 1440 ]; then
+    echo "WARNING: MINUTES capped at 1440 (24 hours)" >&2
+    MINUTES=1440
+fi
+
+if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
+    echo "ERROR: Code must be 200 or 50x" >&2
+    exit 1
+fi
+
+if [[ ! -f "$LOG_FILE" ]]; then
+    echo "0"; exit 0
+fi
+if [[ ! -r "$LOG_FILE" ]]; then
+    echo "ERROR: Cannot read log file: $LOG_FILE" >&2
+    echo "0"; exit 0
+fi
+if [[ ! -s "$LOG_FILE" ]]; then
+    echo "0"; exit 0
+fi
+
+# ------------------------
+# Время начала окна
+# ------------------------
+SINCE_EPOCH=$(date -d "-${MINUTES} minutes" +%s 2>/dev/null || echo "0")
+if [[ "$SINCE_EPOCH" == "0" ]]; then
+    if command -v date >/dev/null 2>&1; then
+        SINCE_EPOCH=$(( $(date +%s) - MINUTES * 60 ))
+    else
+        echo "ERROR: Cannot calculate timestamp" >&2
+        echo "0"; exit 0
+    fi
+fi
+
+# ------------------------
+# Основная обработка через awk
+# ------------------------
+COUNT=$(LC_ALL=C tail -n "$MAX_LINES" "$LOG_FILE" | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
+BEGIN {
+    month_map["Jan"]=1; month_map["Feb"]=2; month_map["Mar"]=3
+    month_map["Apr"]=4; month_map["May"]=5; month_map["Jun"]=6
+    month_map["Jul"]=7; month_map["Aug"]=8; month_map["Sep"]=9
+    month_map["Oct"]=10; month_map["Nov"]=11; month_map["Dec"]=12
+
+    since_valid = (since != 0)
+    error_count = 0
+}
+
+function is_leap_year(year) {
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+function to_epoch(datestr,    parts, datetime, tz, dt, date_parts, d, mon, y, H, M, S, m, sign, h, min, off, timestamp, days_in_month) {
+    if (datestr == "") return 0
+    gsub(/^\[|\]$/, "", datestr)
+    split(datestr, parts, " ")
+    if (length(parts) < 2) return 0
+
+    datetime = parts[1]; tz = parts[2]
+    if (tz !~ /^[+-][0-9]{4}$/) return 0
+
+    split(datetime, dt, ":")
+    if (length(dt) < 4) return 0
+
+    split(dt[1], date_parts, "/")
+    if (length(date_parts) < 3) return 0
+
+    d = date_parts[1] + 0; mon = date_parts[2]; y = date_parts[3] + 0
+    H = dt[2] + 0; M = dt[3] + 0; S = dt[4] + 0
+
+    m = month_map[mon]
+    if (!m) return 0
+    if (y < 1970 || y > 2100) return 0
+
+    days_in_month = 31
+    if (m == 4 || m == 6 || m == 9 || m == 11) days_in_month = 30
+    else if (m == 2) days_in_month = is_leap_year(y) ? 29 : 28
+    if (d < 1 || d > days_in_month) return 0
+    if (H < 0 || H > 23 || M < 0 || M > 59 || S < 0 || S > 59) return 0
+
+    sign = substr(tz, 1, 1)
+    h = substr(tz, 2, 2) + 0
+    min = substr(tz, 4, 2) + 0
+    if (h > 23 || min > 59) return 0
+
+    off = (h * 3600 + min * 60) * (sign == "+" ? 1 : -1)
+    timestamp = mktime(y " " m " " d " " H " " M " " S) - off
+    return (timestamp > 0 && timestamp < 2^31) ? timestamp : 0
+}
+
 {
-    # Пример строки:
-    # 192.168.1.10 - - [01/Oct/2025:07:25:03 +0300] "POST /realms/... HTTP/1.1" 200 2514
-
-    # Первое поле — адрес
+    # ---- Разбор access.log ----
     remote_addr = $1
-
-    # Второе поле — remote_user (может быть "-")
-    remote_user = $3   # смещение из-за того, что после addr идёт "-"
-
-    # Время в квадратных скобках: поля 4 и 5
+    remote_user = $3
     time_str = $4 " " $5
     gsub(/^\[|\]$/, "", time_str)
 
-    # Вырезаем request (между кавычками)
     n = match($0, /\"[^\"]+\"/)
     if (n > 0) {
         request = substr($0, RSTART+1, RLENGTH-2)
@@ -27,23 +124,31 @@ awk '
         request = "-"
     }
 
-    # После кавычек идёт статус и размер
     after = substr($0, RSTART+RLENGTH)
     split(after, p, " ")
     status = ""
     for (i=1; i<=length(p); i++) {
-        if (p[i] != "") {
-            status = p[i]
-            break
-        }
+        if (p[i] != "") { status = p[i]; break }
     }
 
-    # Печатаем 5 полей
-    print "1:", remote_addr, \
-          "2:", remote_user, \
-          "3:[" time_str "]", \
-          "4:\"" request "\"", \
-          "5:", status
-}'
+    if (status == "") { error_count++; next }
 
+    # ---- Фильтрация по коду ----
+    if (code == "200" && status != "200") next
+    if (code == "50x" && status !~ /^5[0-9][0-9]$/) next
+
+    # ---- Время ----
+    log_epoch = to_epoch("[" time_str "]")
+    if (log_epoch == 0) next
+
+    if (!since_valid || log_epoch >= since) count++
+}
+END {
+    if (error_count > 0) {
+        print "DEBUG: skipped " error_count " invalid lines" > "/dev/stderr"
+    }
+    print count + 0
+}' 2>>/var/log/keycloak_metrics_errors.log || echo "0")
+
+echo "${COUNT:-0}"
 
