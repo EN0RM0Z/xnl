@@ -1,0 +1,17 @@
+Через alias
+
+Открой файл ~/.bashrc (если используешь bash):
+
+nano ~/.bashrc
+
+
+Добавь строку:
+
+alias mc='mc -P ~/.config/mc/panels.ini'
+
+
+Сохрани и выйди.
+
+Затем обнови настройки:
+
+source ~/.bashrc
