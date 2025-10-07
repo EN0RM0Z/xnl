@@ -1,0 +1,359 @@
+https://www.keycloak.org/archive/downloads-24.0.5.html
+
+cp /home/xim/keycloak-24.0.5.tar.gz /opt/keycloak-24.0.5.tar.gz
+
+cd /opt/
+
+sudo tar -xzf keycloak-24.0.5.tar.gz
+
+
+mv /opt/keycloak-24.0.5/ /opt/keycloak/24.0.5
+
+sudo firewall-cmd --permanent --zone=public --add-port=8424/tcp
+sudo firewall-cmd --reload
+
+
+--------------
+Вставляем старый конфиг 24
+--------------
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Полная инструкция по обновлению Keycloak 23 -> 25 (PostgreSQL 16, root, без системного пользователя ОС)
+
+Значения для вашей среды:
+
+PGHOST=localhost
+OLD_DB=keycloak23
+OLD_USER=keycloak23
+NEW_DB=keycloak25
+NEW_USER=keycloak25
+BACKUP_DIR=/var/backups
+
+Блок 1. Проверка прав пользователя БД и владельцев объектов
+1.1. Подключаемся к старой базе
+sudo -u postgres psql -d keycloak23
+
+1.2. Проверяем владельцев объектов
+WITH objects AS (
+  -- Таблицы
+  SELECT 'table' AS obj_type,
+         schemaname || '.' || tablename AS obj_name,
+         tableowner AS owner
+  FROM pg_tables
+  WHERE schemaname NOT IN ('pg_catalog','information_schema')
+
+  UNION ALL
+  -- Последовательности
+  SELECT 'sequence',
+         schemaname || '.' || sequencename,
+         sequenceowner
+  FROM pg_sequences
+
+  UNION ALL
+  -- Функции
+  SELECT 'function',
+         n.nspname || '.' || p.proname,
+         r.rolname
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_roles r ON r.oid = p.proowner
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+
+  UNION ALL
+  -- Представления
+  SELECT 'view',
+         schemaname || '.' || viewname,
+         viewowner
+  FROM pg_views
+  WHERE schemaname NOT IN ('pg_catalog','information_schema')
+)
+SELECT *
+FROM objects
+WHERE owner <> 'keycloak23'
+ORDER BY obj_type, obj_name;
+
+
+Если есть строки -> нужно исправить владельцев:
+
+Таблицы:
+ALTER TABLE schema_name.table_name OWNER TO keycloak23;
+
+Последовательности:
+ALTER SEQUENCE schema_name.sequence_name OWNER TO keycloak23;
+
+Функции:
+ALTER FUNCTION schema_name.func_name(arg_type1, arg_type2, ...) OWNER TO keycloak23;
+
+Представления:
+ALTER VIEW schema_name.view_name OWNER TO keycloak23;
+
+
+После исправлений снова выполните запрос для проверки, чтобы все объекты были владельцем keycloak23.
+
+Блок 2. Создание дампов базы
+2.1. Дамп под пользователем Keycloak23 (рекомендуемый для восстановления в новой базе)
+# полный дамп (schema + data)
+sudo -u postgres pg_dump -d keycloak23 --role=keycloak23 -Fc -f /var/backups/keycloak23_kcuser.dump
+
+# дамп только схемы (schema-only)
+sudo -u postgres pg_dump -d keycloak23 --role=keycloak23 -s -f /var/backups/keycloak23_kcuser_schema.sql
+
+2.2. Дамп под суперпользователем postgres
+# полный дамп
+sudo -u postgres pg_dump -d keycloak23 -Fc -f /var/backups/keycloak23_postgres.dump
+
+# дамп только схемы
+sudo -u postgres pg_dump -d keycloak23 -s -f /var/backups/keycloak23_postgres_schema.sql
+
+# дамп ролей (если нужно)
+sudo -u postgres pg_dumpall --roles-only > /var/backups/roles.sql
+
+2.3. Сравнение дампов
+pg_restore -l /var/backups/keycloak23_kcuser.dump  > /tmp/kcuser.list
+pg_restore -l /var/backups/keycloak23_postgres.dump > /tmp/postgres.list
+diff -u /tmp/kcuser.list /tmp/postgres.list
+
+
+Отличия: строки OWNER TO ... и GRANT/REVOKE.
+
+Структура и данные совпадают.
+
+2.4. Проверка восстановляемости дампа
+# создаем тестовую базу
+sudo -u postgres createdb keycloak23_test -O keycloak23
+
+# восстанавливаем дамп
+sudo -u postgres pg_restore --role=keycloak23 -d keycloak23_test /var/backups/keycloak23_kcuser.dump
+
+# проверяем таблицы
+sudo -u postgres psql -d keycloak23_test -c "\dt"
+
+
+ - Таблицы должны отображаться — дамп рабочий.
+
+Блок 3. Создание отдельной базы для Keycloak 25
+3.1. Создаем нового пользователя и базу
+sudo -u postgres psql
+create user keycloak25 with password 'mysuperpasswd';
+create database keycloak25 owner keycloak25;
+grant all privileges on database keycloak25 to keycloak25;
+\q
+
+3.2. Восстанавливаем дамп в новую базу
+sudo -u postgres pg_restore --no-owner --role=keycloak25 -d keycloak25 /var/backups/keycloak23_kcuser.dump
+
+		Удаляем БД keycloak если понядобится
+		sudo -u postgres psql
+		DROP DATABASE keycloak25;
+		Удаляем роль (ругается что есть уже такая роль)
+		DROP ROLE  keycloak25;
+		\l
+		\q
+
+
+3.3. Проверка восстановления
+Проверяем схемы и таблицы
+# Список схем
+sudo -u postgres psql -d keycloak25 -c "\dn"
+
+# Список таблиц
+sudo -u postgres psql -d keycloak25 -c "\dt"
+
+Ожидаем минимум: схема public, таблицы Keycloak (realm, user_entity, client, username_login_failure и т.д.).
+
+
+Проверяем несколько записей из ключевых таблиц
+# Реалмы
+sudo -u postgres psql -d keycloak25 -c "SELECT * FROM realm LIMIT 5;"
+
+# Пользователи
+sudo -u postgres psql -d keycloak25 -c "SELECT * FROM user_entity LIMIT 5;"
+
+# Клиенты
+sudo -u postgres psql -d keycloak25 -c "SELECT * FROM client LIMIT 5;"
+
+# Роли
+sudo -u postgres psql -d keycloak25 -c "SELECT * FROM keycloak_role LIMIT 5;"
+
+# Статистика неудачных логинов
+sudo -u postgres psql -d keycloak25 -c "SELECT * FROM username_login_failure LIMIT 5;"
+
+
+Используем именно фактические имена таблиц, которые видны через \dt.
+- Таблицы должны существовать, данные сохранены.
+
+Проверяем владельцев таблиц
+sudo -u postgres psql -d keycloak25 -c "
+SELECT n.nspname AS schema_name,
+       c.relname AS table_name,
+       r.rolname AS owner
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_roles r ON r.oid = c.relowner
+WHERE c.relkind = 'r'  -- обычные таблицы
+  AND n.nspname NOT IN ('pg_catalog','information_schema')
+ORDER BY schema_name, table_name;"
+
+
+Все таблицы должны иметь владельца keycloak25.
+
+Если есть таблицы с другим владельцем — используем:
+
+ALTER TABLE public.table_name OWNER TO keycloak25;
+
+Для последовательностей
+sudo -u postgres psql -d keycloak25 -c "
+SELECT n.nspname AS schema_name,
+       c.relname AS sequence_name,
+       r.rolname AS owner
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_roles r ON r.oid = c.relowner
+WHERE c.relkind = 'S'  -- последовательности
+  AND n.nspname NOT IN ('pg_catalog','information_schema')
+ORDER BY schema_name, sequence_name;"
+
+Аналогично можно для последовательностей, функций и представлений.
+
+
+Проверяем количество записей (для базового контроля целостности)
+sudo -u postgres psql -d keycloak25 -c "SELECT COUNT(*) FROM realm;"
+sudo -u postgres psql -d keycloak25 -c "SELECT COUNT(*) FROM user_entity;"
+sudo -u postgres psql -d keycloak25 -c "SELECT COUNT(*) FROM client;"
+
+Сравните с оригинальной базой keycloak23 — количество строк должно совпадать.
+
+5 Проверяем права доступа
+sudo -u postgres psql -d keycloak25 -c "\l"
+
+
+В колонке Access privileges для базы keycloak25 можно оставить пустое поле, главное, что владелец — keycloak25.
+
+ - Итоговая проверка успешного восстановления
+
+Таблицы Keycloak из дампа появились в схеме public.
+
+Все таблицы принадлежат владельцу keycloak25.
+
+Можно выполнять SELECT по ключевым таблицам (realm, user_entity, client).
+
+Количество строк совпадает с оригинальной базой.
+
+Нет ошибок при подключении и работе с базой.
+
+Если всё это проходит, значит восстановление дампа в новую базу прошло успешно, и теперь можно запускать Keycloak 25 на этой базе без риска испортить старую 23-ю базу.
+
+
+Блок 4. Подготовка Keycloak 25
+
+Скачиваем Keycloak 25 и распаковываем, например в /opt/keycloak25.
+
+Настраиваем подключение к новой базе в keycloak.conf:
+
+db=postgres
+db-url=jdbc:postgresql://localhost:5432/keycloak25
+db-username=keycloak25
+db-password=<ваш пароль>
+migration-strategy=manual
+
+Блок 5. Обновление базы
+
+
+проверка обновления БД
+sudo -u postgres psql -d keycloak25 -c "SELECT id, filename, dateexecuted FROM databasechangelog ORDER BY dateexecuted DESC LIMIT 10;"
+
+Запускаем Keycloak 25:
+
+Очистка кэша старого build:
+rm -rf /opt/keycloak25/data
+
+
+Build с manual-стратегией:
+
+./kc.sh build --spi-db-schema-update-strategy=manual
+
+
+Проверка конфигурации:
+
+./kc.sh show-config | grep schema
+
+
+— должно быть spi-db-schema-update-strategy=manual.
+
+Старт Keycloak:
+
+./kc.sh start --optimized
+
+
+Keycloak обновит схему базы вручную.
+
+Логи смотрим в /opt/keycloak25/standalone/log/server.log.
+
+Блок 6. Проверка успешного обновления
+6.1. Через логи
+grep -i migration /opt/keycloak25/standalone/log/server.log
+
+grep -i 'Database update successful' /var/log/keycloak/server24.log
+grep -i 'Database update' /var/log/keycloak/server24.log
+
+Должны быть строки:
+
+INFO  [org.keycloak.connections.jpa.updater.liquibase.updaters.LiquibaseUpdater] Database update successful
+
+6.2. Через веб-интерфейс
+
+Проверяем: пользователи, группы, клиенты.
+
+Пробуем авторизацию тестовым пользователем.
+
+6.3. Через базу
+sudo -u postgres psql -d keycloak25 -c "\dt"
+
+Колонки ключевых таблиц:
+sudo -u postgres psql -d keycloak25 -c "\d realm"
+sudo -u postgres psql -d keycloak25 -c "\d user_entity"
+sudo -u postgres psql -d keycloak25 -c "\d client"
+
+
+Таблица миграции:
+sudo -u postgres psql -d keycloak25 -c "SELECT * FROM databasechangelog ORDER BY dateexecuted DESC LIMIT 10;"
+
+Все таблицы должны существовать, данные сохранены.
+
+Блок 7. Переключение приложений
+
+После полной проверки Keycloak 25 — приложения подключаются к новой базе.
+
+Старый Keycloak 23 можно останавливать только после успешного перехода.
+
+
+обновление:
+1. запускаем Keycloak в manual-режиме, чтобы проверить подключение к базе:
+./kc.sh build --spi-db-schema-update-strategy=manual
+
+Затем запусти:
+НЕ ЗАПУСКАЙ! АВТОМАТИЧЕСКИ ОБНОВЛЯЕТ
+			/opt/keycloak24/bin/kc.sh start --optimized
+
+
+
+Сервер проверит схему и даст предупреждение, что миграция не применена.
+Логи покажут, какие объекты ожидаются, чего нет.
+
+2. Затем экспортируем SQL для ручной миграции:
+Экспортирует SQL-сценарий для ручного обновления схемы базы. Создаёт SQL-файл, который можно применить через psql. Не запускает сервер для обслуживания пользователей.
+НЕ ЗАПУСКАЙ! АВТОМАТИЧЕСКИ ОБНОВЛЯЕТ
+./kc.sh export --file /tmp/kc_migration.sql
+
+
+Этот файл содержит все необходимые изменения схемы (CREATE TABLE, ALTER TABLE, CREATE SEQUENCE и т.д.) для обновления 23 -> 25.
+Файл можно редактировать вручную при необходимости (например, исправить владельцев).
+
+Применяем SQL через psql:
+sudo -u postgres psql -d keycloak25 -f /tmp/kc_migration.sql
+
+проверка обновления БД
+sudo -u postgres psql -d keycloak25 -c "SELECT id, filename, dateexecuted FROM databasechangelog ORDER BY dateexecuted DESC LIMIT 10;"
+
+
