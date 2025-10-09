@@ -1,0 +1,25 @@
+case "$CODE" in
+    200) MODE="200" ;;
+    50x|5xx) MODE="5xx" ;;   # оба варианта считаем одинаково
+    3xx) MODE="3xx" ;;
+    4xx) MODE="4xx" ;;
+    all) MODE="all" ;;
+    *)   MODE="all" ;;       # всё остальное — считаем all
+esac
+
+# ---- Фильтрация по режиму ----
+if (mode == "200") {
+    if (status != "200") next
+}
+else if (mode == "3xx") {
+    if (status !~ /^3[0-9][0-9]$/) next
+}
+else if (mode == "4xx") {
+    if (status !~ /^4[0-9][0-9]$/) next
+}
+else if (mode == "5xx") {
+    if (status !~ /^5[0-9][0-9]$/) next
+}
+else if (mode == "all") {
+    if (status !~ /^[0-9]{3}$/) next
+}
