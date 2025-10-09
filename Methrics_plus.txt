@@ -1,3 +1,60 @@
+было:
+
+if [[ "$CODE" != "200" && "$CODE" != "50x" ]]; then
+    echo "ERROR: Code must be 200 or 50x" >&2
+    exit 1
+fi
+
+
+✅ станет:
+
+# Режим фильтрации: 200 / 50x / all
+if [[ "$CODE" == "200" ]]; then
+    MODE="200"
+elif [[ "$CODE" == "50x" ]]; then
+    MODE="50x"
+else
+    MODE="all"
+fi
+
+
+И при вызове awk:
+❌ было
+
+... | awk -v since="$SINCE_EPOCH" -v code="$CODE" '
+
+
+✅ станет
+
+... | awk -v since="$SINCE_EPOCH" -v mode="$MODE" '
+
+
+🔧 В awk заменяем фильтрацию:
+
+❌ было:
+
+# ---- Фильтрация по коду ----
+if (code == "200" && status != "200") next
+if (code == "50x" && status !~ /^5[0-9][0-9]$/) next
+
+
+✅ станет:
+
+# ---- Фильтрация по режиму ----
+if (mode == "200") {
+    if (status != "200") next
+}
+else if (mode == "50x") {
+    if (status !~ /^5[0-9][0-9]$/) next
+}
+else if (mode == "all") {
+    if (status !~ /^[0-9]{3}$/) next
+}
++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+
 case "$CODE" in
     200) MODE="200" ;;
     50x|5xx) MODE="5xx" ;;   # оба варианта считаем одинаково
