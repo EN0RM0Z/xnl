@@ -1,0 +1,100 @@
+keycloak_users_activity_host.sh
+#!/bin/bash
+
+# Имя контейнера MariaDB
+DB_CONTAINER="keycloak-mariadb"
+
+# База данных и учётные данные
+DB_NAME="keycloak"
+DB_USER="keycloak_user"
+DB_PASS="keycloak_password"
+
+# Рилм, для которого делаем отчёт
+REALM="$1"
+if [[ -z "$REALM" ]]; then
+    echo "Usage: $0 <realm_name>"
+    exit 1
+fi
+
+# Файл для вывода
+OUTPUT_FILE="keycloak_users_${REALM}_activity.csv"
+
+# SQL-запрос
+SQL_QUERY="
+SELECT 
+    r.realm_name AS realm,
+    u.username,
+    u.enabled,
+    MAX(e.event_time) AS last_login
+FROM 
+    user_entity u
+JOIN 
+    realm r ON u.realm_id = r.id
+LEFT JOIN 
+    event_entity e ON u.id = e.user_id AND e.event_type = 'LOGIN'
+WHERE
+    r.realm_name = '$REALM'
+GROUP BY 
+    r.realm_name, u.username, u.enabled
+ORDER BY 
+    last_login DESC;
+"
+
+# Выполнение запроса в контейнере и сохранение в CSV
+docker exec -i "$DB_CONTAINER" mysql -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+    -e "$SQL_QUERY" --batch --skip-column-names | awk 'BEGIN{print "realm,username,enabled,last_login"}{print $0}' > "$OUTPUT_FILE"
+
+echo "Отчёт сохранён в $OUTPUT_FILE"
+
+========================
+
+eycloak_users_activity_ldap_host.sh
+#!/bin/bash
+
+# Имя контейнера MariaDB
+DB_CONTAINER="keycloak-mariadb"
+
+# База данных и учётные данные
+DB_NAME="keycloak"
+DB_USER="keycloak_user"
+DB_PASS="keycloak_password"
+
+# Рилм
+REALM="$1"
+if [[ -z "$REALM" ]]; then
+    echo "Usage: $0 <realm_name>"
+    exit 1
+fi
+
+OUTPUT_FILE="keycloak_users_${REALM}_activity_ldap.csv"
+
+# SQL-запрос
+SQL_QUERY="
+SELECT 
+    r.realm_name AS realm,
+    u.username,
+    u.enabled,
+    MAX(e.event_time) AS last_login,
+    u.federation_link,
+    u.user_account_control
+FROM 
+    user_entity u
+JOIN 
+    realm r ON u.realm_id = r.id
+LEFT JOIN 
+    event_entity e ON u.id = e.user_id AND e.event_type = 'LOGIN'
+WHERE
+    r.realm_name = '$REALM'
+GROUP BY 
+    r.realm_name, u.username, u.enabled, u.federation_link, u.user_account_control
+ORDER BY 
+    last_login DESC;
+"
+
+# Выполнение запроса в контейнере и сохранение в CSV
+docker exec -i "$DB_CONTAINER" mysql -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+    -e "$SQL_QUERY" --batch --skip-column-names | awk 'BEGIN{print "realm,username,enabled,last_login,federation_link,userAccountControl"}{print $0}' > "$OUTPUT_FILE"
+
+echo "Расширённый отчёт сохранён в $OUTPUT_FILE"
+
+
