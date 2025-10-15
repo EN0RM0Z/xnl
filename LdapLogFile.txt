@@ -1,0 +1,43 @@
+Пример конфигурации (самый понятный — файл conf/quarkus.properties)
+
+Рекомендую заводить отдельный файл conf/quarkus.properties рядом с вашим keycloak/kc скриптом и указывать в нём свойства Quarkus. Если вы предпочитаете — эти же свойства можно передать через -D JVM-опции при старте (JAVA_OPTS) или через переменные окружения (см. ниже).
+
+Создайте (или отредактируйте) файл: <KC_HOME>/conf/quarkus.properties и добавьте туда (пример):
+
+# Включаем файловый лог (если ещё не включён)
+quarkus.log.console.enable=true
+quarkus.log.file.enable=true
+
+# Общая настройка файла (необязательно — можно задать только для именнованного handler'а)
+quarkus.log.file.path=${kc.home.dir:./}data/log/keycloak.log
+quarkus.log.file.rotation.max-file-size=10M
+quarkus.log.file.rotation.max-backup-index=5
+
+# --- создаём именованный file handler с именем LDAP_FILE ---
+quarkus.log.handler.file."LDAP_FILE".enable=true
+# путь именно для этого handler'а (полезно, если хотите отдельный файл)
+quarkus.log.handler.file."LDAP_FILE".path=${kc.home.dir:./}data/log/ldap-sync.log
+# формат строки лога (пример — можно настроить)
+quarkus.log.handler.file."LDAP_FILE".format=%d{yyyy-MM-dd HH:mm:ss,SSS} %-5p [%c] (%t) %s%e%n
+# ограничение уровня записей в этот handler (если нужно)
+quarkus.log.handler.file."LDAP_FILE".level=DEBUG
+
+# --- привязываем этот handler к категории LDAP и отключаем отправку в родителя ---
+quarkus.log.category."org.keycloak.storage.ldap".level=DEBUG
+quarkus.log.category."org.keycloak.storage.ldap".handlers=LDAP_FILE
+# важно: если true — сообщения пойдут также в родительские (например в основной файл/консоль)
+quarkus.log.category."org.keycloak.storage.ldap".use-parent-handlers=false
+
+Сохраните файл и перезапустите Keycloak. Эти настройки заставят всё, что логирует пакет org.keycloak.storage.ldap (включая сообщения об ошибках синхронизации пользователей), попадать только в data/log/ldap-sync.log (и не в основной лог), если use-parent-handlers=false.
+
+Полезные настройки (рекомендации)
+
+Установите quarkus.log.file.rotation.* или quarkus.log.handler.file."LDAP_FILE".rotation.* (если handler поддерживает) — чтобы лог не разрастался. Пример: quarkus.log.file.rotation.max-file-size=50M и quarkus.log.file.rotation.max-backup-index=7. 
+Mastertheboss
+
+Для долгосрочной агрегации/поиска ошибок — отправляйте логи в central log system (syslog/ELK/Graylog) — Quarkus поддерживает syslog/структурированные обработчики. 
+Quarkus
+
+Если вы хотите логировать только ошибки (а не INFO/DEBUG), уменьшите уровень quarkus.log.category."org.keycloak.storage.ldap".level=ERROR. Тогда в файл попадут только ошибки/фейлы синхронизации. 
+docs.redhat.com
+
