@@ -1,3 +1,10 @@
+proxy-headers=xforwarded
+hostname=auth.example.com
+hostname-url=https://auth.example.com
+hostname-strict=true
+hostname-strict-https=true
+
+
 
 sudo systemctl status keycloak
 sudo systemctl stop keycloak
