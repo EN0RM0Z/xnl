@@ -1,0 +1,52 @@
+
+sudo systemctl status keycloak
+sudo systemctl stop keycloak
+sudo systemctl status keycloak
+
+sudo -u postgres psql
+\l
+
+sudo -u postgres psql -d keycloak23 -c "SELECT id, filename, dateexecuted FROM databasechangelog ORDER BY dateexecuted DESC LIMIT 10;"
+sudo -u postgres psql -d keycloak25 -c "SELECT id, filename, dateexecuted FROM databasechangelog ORDER BY dateexecuted DESC LIMIT 10;"
+
+./backup-keycloak-db_0.sh
+
+# Список схем
+sudo -u postgres psql -d keycloak25 -c "\dn"
+
+# Список таблиц
+sudo -u postgres psql -d keycloak25 -c "\dt"
+
+sudo -u postgres pg_restore --no-owner --role=keycloak25 -d keycloak25 /opt/keycloak/backups/keycloak23_kcuser.dump
+
+# Список схем
+sudo -u postgres psql -d keycloak25 -c "\dn"
+
+# Список таблиц
+sudo -u postgres psql -d keycloak25 -c "\dt"
+
+./kc.sh build
+./kc.sh start --optimized
+
+sudo -u postgres psql -d keycloak25 -c "SELECT id, filename, dateexecuted FROM databasechangelog ORDER BY dateexecuted DESC LIMIT 10;"
+
+В логах:
+started in
+
+создание символьной ссылки
+ln -s /opt/keycloak/25.0.6 /opt/keycloak/current
+
+sudo chown -R keycloak:keycloak /opt/keycloak
+chmod -R 755 /opt/keycloak/25.0.6/data
+
+chown -R keycloak:keycloak /opt/keycloak/25.0.6/data
+sudo chown -R keycloak:keycloak /var/log/keycloak
+chmod -R 750 /var/log/keycloak
+
+удалить папку
+rm -rf /tmp/vertx-cache
+
+
+
+sudo systemctl start keycloak
+sudo systemctl status keycloak
