@@ -1,29 +1,18 @@
 #!/bin/bash
 #
 # Экспорт пользователей Keycloak 16 (MariaDB)
-# Без временных файлов в контейнере, с заголовками CSV
+# С поддержкой кириллицы (UTF-8) и без временных файлов в контейнере
 # ------------------------------------------------------
 
 ### === НАСТРОЙКИ ===
 
-# Имя контейнера MariaDB
-MARIADB_CONTAINER="mariadb"
-
-# Имя базы данных
-DB_NAME="keycloak"
-
-# Пользователь и пароль БД
-DB_USER="keycloak"
-DB_PASS="secret"
-
-# Рильм для выгрузки
-REALM="myrealm"
-
-# Количество пользователей
-LIMIT=10
-
-# Путь к итоговому CSV на хосте
-OUTPUT_FILE="./users.csv"
+MARIADB_CONTAINER="mariadb"   # контейнер MariaDB
+DB_NAME="keycloak"            # имя базы
+DB_USER="keycloak"            # пользователь
+DB_PASS="secret"              # пароль
+REALM="myrealm"               # рильм
+LIMIT=10                      # количество пользователей
+OUTPUT_FILE="./users.csv"     # файл на хосте
 
 ### === КОНЕЦ НАСТРОЕК ===
 
@@ -33,8 +22,9 @@ echo "📤 Экспорт пользователей рильма '$REALM' из 
 # Заголовки CSV
 HEADER='"user_id","realm_id","username","email","first_name","last_name","enabled","email_verified","created_at","service_account_client","attributes","roles","groups","federated_providers"'
 
-# SQL-запрос (без INTO OUTFILE)
+# SQL-запрос
 SQL_QUERY=$(cat <<EOF
+SET NAMES utf8mb4;
 SELECT 
   ue.ID AS user_id,
   ue.REALM_ID AS realm_id,
@@ -64,11 +54,11 @@ LIMIT $LIMIT;
 EOF
 )
 
-# Выполняем SQL в контейнере и сохраняем CSV на хост
+# Выполняем SQL в контейнере с корректной кодировкой
 {
   echo "$HEADER"
   docker exec -i "$MARIADB_CONTAINER" \
-    mysql -N -B -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "$SQL_QUERY"
+    mysql --default-character-set=utf8mb4 -N -B -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "$SQL_QUERY"
 } > "$OUTPUT_FILE"
 
 # Проверяем результат
@@ -80,3 +70,4 @@ if [[ -f "$OUTPUT_FILE" ]]; then
 else
   echo "❌ Ошибка: не удалось создать файл экспорта"
 fi
+
