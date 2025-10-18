@@ -1,41 +1,39 @@
 #!/bin/bash
 #
-# Экспорт пользователей Keycloak (версия 16, база MariaDB)
-# С добавлением заголовков CSV
-# ----------------------------------------------
+# Экспорт пользователей Keycloak 16 (MariaDB)
+# Без временных файлов в контейнере, с заголовками CSV
+# ------------------------------------------------------
 
 ### === НАСТРОЙКИ ===
 
-# Имя Docker-контейнера с MariaDB
+# Имя контейнера MariaDB
 MARIADB_CONTAINER="mariadb"
 
-# Имя базы данных Keycloak
+# Имя базы данных
 DB_NAME="keycloak"
 
 # Пользователь и пароль БД
 DB_USER="keycloak"
 DB_PASS="secret"
 
-# Название рильма
+# Рильм для выгрузки
 REALM="myrealm"
-
-# Временные пути внутри контейнера
-TMP_FILE="/tmp/users.csv"
-TMP_HEADER="/tmp/users_header.csv"
-TMP_FULL="/tmp/users_full.csv"
-
-# Путь для сохранения CSV на хосте
-OUTPUT_FILE="./users.csv"
 
 # Количество пользователей
 LIMIT=10
+
+# Путь к итоговому CSV на хосте
+OUTPUT_FILE="./users.csv"
 
 ### === КОНЕЦ НАСТРОЕК ===
 
 
 echo "📤 Экспорт пользователей рильма '$REALM' из контейнера '$MARIADB_CONTAINER'..."
 
-# SQL-запрос без заголовков
+# Заголовки CSV
+HEADER='"user_id","realm_id","username","email","first_name","last_name","enabled","email_verified","created_at","service_account_client","attributes","roles","groups","federated_providers"'
+
+# SQL-запрос (без INTO OUTFILE)
 SQL_QUERY=$(cat <<EOF
 SELECT 
   ue.ID AS user_id,
@@ -52,10 +50,6 @@ SELECT
   GROUP_CONCAT(DISTINCT r.NAME SEPARATOR ', ') AS roles,
   GROUP_CONCAT(DISTINCT g.NAME SEPARATOR ', ') AS groups,
   GROUP_CONCAT(DISTINCT fc.IDENTITY_PROVIDER SEPARATOR ', ') AS federated_providers
-INTO OUTFILE '$TMP_FILE'
-FIELDS TERMINATED BY ',' 
-ENCLOSED BY '"'
-LINES TERMINATED BY '\n'
 FROM USER_ENTITY ue
   LEFT JOIN USER_ATTRIBUTE ua ON ue.ID = ua.USER_ID
   LEFT JOIN USER_ROLE_MAPPING ur ON ue.ID = ur.USER_ID
@@ -70,21 +64,12 @@ LIMIT $LIMIT;
 EOF
 )
 
-# Заголовок CSV (добавляется вручную)
-HEADER_LINE='"user_id","realm_id","username","email","first_name","last_name","enabled","email_verified","created_at","service_account_client","attributes","roles","groups","federated_providers"'
-
-# Очистка временных файлов
-docker exec -i "$MARIADB_CONTAINER" bash -c "rm -f '$TMP_FILE' '$TMP_HEADER' '$TMP_FULL'"
-
-# Выполняем SQL внутри контейнера
-docker exec -i "$MARIADB_CONTAINER" bash -c \
-  "mysql -u$DB_USER -p$DB_PASS -D$DB_NAME -e \"$SQL_QUERY\""
-
-# Добавляем заголовок
-docker exec -i "$MARIADB_CONTAINER" bash -c "echo $HEADER_LINE > '$TMP_HEADER' && cat '$TMP_HEADER' '$TMP_FILE' > '$TMP_FULL'"
-
-# Копируем готовый CSV на хост
-docker cp "$MARIADB_CONTAINER":"$TMP_FULL" "$OUTPUT_FILE"
+# Выполняем SQL в контейнере и сохраняем CSV на хост
+{
+  echo "$HEADER"
+  docker exec -i "$MARIADB_CONTAINER" \
+    mysql -N -B -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "$SQL_QUERY"
+} > "$OUTPUT_FILE"
 
 # Проверяем результат
 if [[ -f "$OUTPUT_FILE" ]]; then
