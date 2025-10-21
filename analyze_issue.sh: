@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# Время интересующего события
+START="2025-10-17 00:00:14"
+END="2025-10-17 00:06:14"
+OUTPUT="/tmp/system_issue_logs_$(date +%Y%m%d_%H%M%S).log"
+
+echo "Собираем логи с $START до $END в $OUTPUT"
+
+# 1. Общие системные логи
+echo "=== journalctl: все сообщения ===" >> "$OUTPUT"
+journalctl --since "$START" --until "$END" >> "$OUTPUT" 2>&1
+
+# 2. Только ошибки и критические события
+echo "=== journalctl: ошибки и критические события ===" >> "$OUTPUT"
+journalctl -p err..emerg --since "$START" --until "$END" >> "$OUTPUT" 2>&1
+
+# 3. Перезапуски сервисов
+echo "=== journalctl: systemd сервисы (активность) ===" >> "$OUTPUT"
+journalctl --since "$START" --until "$END" -u '*' | grep -Ei 'starting|started|stopping|failed|reload' >> "$OUTPUT" 2>&1
+
+# 4. OOM (Out Of Memory) события
+echo "=== OOM / memory issues ===" >> "$OUTPUT"
+journalctl --since "$START" --until "$END" | grep -i 'oom\|out of memory' >> "$OUTPUT" 2>&1
+dmesg | grep -i 'oom' >> "$OUTPUT" 2>&1
+
+# 5. SELinux / аудит
+if [ -f /var/log/audit/audit.log ]; then
+    echo "=== SELinux / audit log ===" >> "$OUTPUT"
+    ausearch -ts "$START" -te "$END" >> "$OUTPUT" 2>&1
+fi
+
+# 6. Логи основных файлов
+LOG_FILES=("/var/log/messages" "/var/log/secure" "/var/log/cron" "/var/log/dmesg")
+
+for LOG in "${LOG_FILES[@]}"; do
+    if [ -f "$LOG" ]; then
+        echo "=== $LOG ===" >> "$OUTPUT"
+        grep -E "Oct 17 00:0[0-6]:" "$LOG" >> "$OUTPUT" 2>&1
+    fi
+done
+
+echo "=== Конец сбора логов ===" >> "$OUTPUT"
+echo "Готово. Логи собраны в $OUTPUT"
+
