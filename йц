@@ -1,0 +1,17 @@
+CONTAINER_ID=fcaeb7f66ba2e36d7f0a26a99268b3181b818d0aefa9329a76cec808865fd006
+
+echo "Проверка контейнера $CONTAINER_ID"
+
+# PID на хосте
+PID=$(sudo docker inspect --format '{{.State.Pid}}' $CONTAINER_ID)
+
+# Пользователь на хосте, который владеет PID
+HOST_USER=$(ps -o user= -p $PID)
+
+# Пользователь внутри контейнера
+INTERNAL_USER=$(sudo docker inspect --format '{{.Config.User}}' $CONTAINER_ID)
+if [ -z "$INTERNAL_USER" ]; then INTERNAL_USER="(по умолчанию образа)"; fi
+
+echo "PID на хосте: $PID"
+echo "Пользователь на хосте: $HOST_USER"
+echo "Пользователь внутри контейнера: $INTERNAL_USER"
