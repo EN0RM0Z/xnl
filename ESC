@@ -1,0 +1,3 @@
+(Get-Content server.log) -replace '\x1B\[[0-9;]*[A-Za-z]', '' | Set-Content clean.log
+
+\x1B\[[0-9;]*[A-Za-z]
