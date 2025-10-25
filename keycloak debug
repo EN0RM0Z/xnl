@@ -102,3 +102,78 @@ case "$1" in
         exit 1
         ;;
 esac
+
+==========================
+netmonitor.sh
+
+#!/bin/bash
+
+# Скрипт для мониторинга сетевых соединений
+# Автор: DevOps Expert
+# Запускать: nohup ./monitor_network.sh &
+
+LOG_DIR="/var/log/keycloak/incident_$(date +%Y%m%d)"
+mkdir -p "$LOG_DIR"
+
+LOG_FILE="$LOG_DIR/network_connections_$(date +%Y%m%d_%H%M%S).log"
+INTERVAL=1  # секунды
+
+echo "=== Мониторинг сетевых соединений начат: $(date) ===" > "$LOG_FILE"
+echo "PID скрипта: $$" >> "$LOG_FILE"
+
+while true; do
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    echo "" >> "$LOG_FILE"
+    echo "======================================" >> "$LOG_FILE"
+    echo "TIMESTAMP: $TIMESTAMP" >> "$LOG_FILE"
+    echo "======================================" >> "$LOG_FILE"
+    
+    # 1. Все ESTABLISHED соединения с деталями процессов
+    echo "" >> "$LOG_FILE"
+    echo "--- ESTABLISHED CONNECTIONS ---" >> "$LOG_FILE"
+    ss -tnp state established 2>/dev/null | awk 'NR==1 || /^ESTAB/' >> "$LOG_FILE"
+    
+    # 2. Попытки подключения (SYN-SENT, SYN-RECV)
+    echo "" >> "$LOG_FILE"
+    echo "--- CONNECTING ATTEMPTS ---" >> "$LOG_FILE"
+    ss -tnp state syn-sent state syn-recv 2>/dev/null >> "$LOG_FILE"
+    
+    # 3. TIME-WAIT соединения (могут указывать на проблемы)
+    echo "" >> "$LOG_FILE"
+    echo "--- TIME-WAIT CONNECTIONS ---" >> "$LOG_FILE"
+    ss -tn state time-wait 2>/dev/null | wc -l >> "$LOG_FILE"
+    
+    # 4. Все открытые порты для прослушивания
+    echo "" >> "$LOG_FILE"
+    echo "--- LISTENING PORTS ---" >> "$LOG_FILE"
+    ss -tlnp 2>/dev/null >> "$LOG_FILE"
+    
+    # 5. Статистика соединений по портам
+    echo "" >> "$LOG_FILE"
+    echo "--- CONNECTION STATS BY PORT ---" >> "$LOG_FILE"
+    ss -tn | awk 'NR>1 {print $4}' | sed 's/.*://' | sort | uniq -c | sort -rn >> "$LOG_FILE"
+    
+    # 6. Соединения MariaDB (порт 3306)
+    echo "" >> "$LOG_FILE"
+    echo "--- MARIADB CONNECTIONS (3306) ---" >> "$LOG_FILE"
+    ss -tnp '( dport = :3306 or sport = :3306 )' 2>/dev/null >> "$LOG_FILE"
+    
+    # 7. Соединения Keycloak (обычно 8080)
+    echo "" >> "$LOG_FILE"
+    echo "--- KEYCLOAK CONNECTIONS (8080) ---" >> "$LOG_FILE"
+    ss -tnp '( dport = :8080 or sport = :8080 )' 2>/dev/null >> "$LOG_FILE"
+    
+    # 8. Nginx соединения
+    echo "" >> "$LOG_FILE"
+    echo "--- NGINX CONNECTIONS (80,443) ---" >> "$LOG_FILE"
+    ss -tnp '( dport = :80 or sport = :80 or dport = :443 or sport = :443 )' 2>/dev/null >> "$LOG_FILE"
+    
+    # 9. Количество соединений по процессам
+    echo "" >> "$LOG_FILE"
+    echo "--- CONNECTIONS PER PROCESS ---" >> "$LOG_FILE"
+    lsof -i -n -P 2>/dev/null | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn | head -20 >> "$LOG_FILE"
+    
+    sleep $INTERVAL
+done
+
