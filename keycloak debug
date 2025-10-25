@@ -1,0 +1,35 @@
+1. Включить debug-уровень логов Keycloak
+
+Keycloak 16 использует WildFly, поэтому уровень логирования можно поменять налету:
+
+docker exec -it keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --command="/subsystem=logging/root-logger=ROOT:change-root-log-level(level=DEBUG)"
+
+
+Проверить:
+
+docker exec -it keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --command="/subsystem=logging/root-logger=ROOT:read-resource"
+
+
+Отключить обратно при необходимости:
+
+docker exec -it keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --command="/subsystem=logging/root-logger=ROOT:change-root-log-level(level=INFO)"
+
+🧩 2. Снять логи в файл на хосте
+
+Чтобы логи не потерялись после зависания, можно запустить команду на хосте:
+
+docker logs -f --tail 50 keycloak | tee -a /var/log/keycloak_debug_$(date +%F_%H-%M).log
+
+
+📄 Это создаст файл, например:
+
+/var/log/keycloak_debug_2025-10-25_23-57.log
+
+
+И будет писать туда всё, что идёт в stdout/stderr контейнера.
+
+🧩 3. (Опционально) Проверить текущий уровень логирования
+
+Можно быстро посмотреть, какой сейчас уровень активен:
+
+docker exec -it keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --command=":read-attribute(name=level, path=/subsystem=logging/root-logger=ROOT)"
