@@ -1,0 +1,76 @@
+1️⃣ Включаем подробный лог планировщика
+
+В контейнере или в KC16 через keycloak.conf или JAVA_OPTS:
+
+-Dorg.keycloak.services.scheduled.level=DEBUG
+
+
+Или временно через логгер:
+
+docker exec -it keycloak /opt/keycloak/bin/kc.sh set-log-level org.keycloak.services.scheduled DEBUG
+
+То чтобы вернуть обычный уровень INFO, выполняем:
+
+docker exec -it keycloak /opt/keycloak/bin/kc.sh set-log-level org.keycloak.services.scheduled INFO
+
+
+2️⃣ Смотрим время следующего запуска через лог
+
+Например:
+
+docker exec -it keycloak tail -f /opt/keycloak/standalone/log/server.log | grep -i "Next run"
+
+
+Пример вывода:
+
+INFO  [UserSessionReaper] Next run scheduled at 2025-10-26 00:00:00
+INFO  [ClientSessionReaper] Next run scheduled at 2025-10-26 00:00:00
+INFO  [ExpiredOfflineUserSessionCleaner] Next run scheduled at 2025-10-26 00:00:00
+
+
+Это и есть точное время, которое планировщик использует сейчас (по локальной time zone JVM).
+
+3️⃣ Альтернатива: через JMX
+
+Если включен JMX:
+
+docker exec -it keycloak jconsole
+
+
+MBeans → keycloak → scheduler → tasks
+
+Поле nextRunTime покажет реальное время запуска.
+
+💡 Вывод:
+Прямая “команда” для CLI:
+
+docker exec -it keycloak grep -i "Next run" /opt/keycloak/standalone/log/server.log
+
+
+Она покажет все задачи и их время следующего запуска, без изменения конфигурации и без перезапуска.
+
+
+табличный вывод всех планировщиков Keycloak 16 с их именами и временем следующего запуска из логов, без остановки контейнера.
+
+Вот готовая команда для Docker:
+
+docker exec -it keycloak bash -c '\
+grep -i "Next run" /opt/keycloak/standalone/log/server.log | \
+awk -F"] " '\''{split($2,a,"Next run scheduled at "); print a[1] "\t" a[2]}'\'' | \
+column -t
+'
+
+🔹 Что делает команда:
+
+grep -i "Next run" — ищет все строки в логах Keycloak, где указано время следующего запуска задач.
+
+awk — разбивает строку на две части: имя задачи и время следующего запуска.
+
+column -t — выравнивает вывод в виде таблицы.
+
+🔹 Пример вывода:
+UserSessionReaper                  2025-10-26 00:00:00
+ClientSessionReaper                2025-10-26 00:00:00
+ExpiredOfflineUserSessionCleaner   2025-10-26 00:00:00
+ActionTokenReaper                  2025-10-26 00:00:00
+
