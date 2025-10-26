@@ -1,3 +1,6 @@
+-e JAVA_OPTS="-Dorg.keycloak.services.scheduled.level=DEBUG" \
+
+
 1️⃣ Включение DEBUG для планировщика задач
 docker exec -it keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect \
   --command="/subsystem=logging/logger=org.keycloak.services.scheduled:add(level=DEBUG)"
