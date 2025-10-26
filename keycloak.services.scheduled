@@ -74,3 +74,8 @@ ClientSessionReaper                2025-10-26 00:00:00
 ExpiredOfflineUserSessionCleaner   2025-10-26 00:00:00
 ActionTokenReaper                  2025-10-26 00:00:00
 
+
+docker exec -it keycloak bash -c '\
+docker logs keycloak --since 10m | grep -i "Next run" | \
+awk -F"] " '\''{split($2,a,"Next run scheduled at "); print a[1] "\t" a[2]}'\'''
+
