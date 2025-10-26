@@ -1,4 +1,5 @@
 -e JAVA_OPTS="-Dorg.keycloak.services.scheduled.level=DEBUG" \
+-e JAVA_OPTS_APPEND="-Dkeycloak.scheduled.start-delay=14400000 -Dkeycloak.scheduled.interval=3600000 -Dorg.keycloak.services.scheduled.level=DEBUG -Dkeycloak.profile.feature.scripts=enabled" \
 
 
 1️⃣ Включение DEBUG для планировщика задач
