@@ -295,3 +295,15 @@ echo "Для просмотра отчета:"
 echo "  less $REPORT_FILE"
 echo "  или"
 echo "  cat $REPORT_FILE"
+
+
+
+# где /logs/general.log — твой лог MariaDB
+grep -n "FROM REALM" /logs/general.log | tail -n 200
+
+# или более конкретно по фрагменту с REALM_ATTRIBUTE:
+grep -n "REALM_ATTRIBUTE" /logs/general.log | tail -n 200
+
+# или полное вхождение (часть запроса):
+grep -n "left outer join REALM_ATTRIBUTE" /logs/general.log | tail -n 200
+
