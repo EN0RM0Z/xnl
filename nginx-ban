@@ -1,0 +1,82 @@
+
+после исправления проверить
+sudo nginx -t
+
+презагрузить:
+sudo nginx -s reload
+или
+sudo nginx -s reload
+
+Проверка, что правило работает
+Попробуйте выполнить запрос к /auth/admin/realms/realm5/users:
+
+curl -i http://<ваш_домен>/auth/admin/realms/realm5/users
+
+Ожидаемый результат: HTTP/1.1 403 Forbidden.
+То же для /auth/admin/realms/realm5/users/<id>.
+
+
+
+# Upstream Keycloak
+upstream keycloak {
+    ip_hash;
+    server 127.0.0.1:8423;
+}
+
+# HTTP -> HTTPS Redirect
+server {
+    listen 80;
+    server_name keyc23.mydomain;
+    # Перенаправление на HTTPS
+    return 301 https://$server_name$request_uri;
+}
+
+# HTTPS Server Block
+server {
+    listen 443 ssl http2;    # http/2.0
+#    listen 443 ssl;          # http/1.1
+    server_name keyc23.mydomain;
+
+    # SSL Config
+    ssl_certificate      /etc/nginx/ssl/keycloak23.crt;
+    ssl_certificate_key  /etc/nginx/ssl/keycloak23.key;
+    include              /etc/nginx/ssl.conf;
+
+    access_log /var/log/nginx/keycloak.access23.log main;
+    error_log  /var/log/nginx/keycloak.error23.log warn;
+
+    # --- Блокировка всех запросов к /auth/admin/realms/realm5/users ---
+    location ~ ^/auth/admin/realms/realm5/users(/.*)?$ {
+        deny all;
+        return 403;
+    }
+
+    # Keycloak Location
+    location / {
+        proxy_pass http://localhost:8423; # лучше здесь указывать внешний
+
+        # Заголовки прокси (специфичные для Keycloak)
+        proxy_set_header Host               $host;
+        proxy_set_header X-Real-IP          $remote_addr;
+        proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto  $scheme;
+        proxy_set_header X-Forwarded-Host   $host;
+        proxy_set_header X-Forwarded-Server $host;
+        proxy_set_header X-Forwarded-Port   443;
+
+        # Производительность (специфичные для Keycloak)
+        proxy_buffer_size          128k;
+        proxy_buffers              4 256k;
+        proxy_busy_buffers_size    256k;
+        proxy_connect_timeout      30s;
+        proxy_send_timeout         90s;
+        proxy_read_timeout         90s;
+
+        # Security Headers (специфичные для Keycloak)
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws:; frame-ancestors 'self';" always;
+        add_header Permissions-Policy "accelerometer=(), ambient-light-sensor=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(self), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), sync-xhr=(), usb=(), vr=(), interest-cohort=()";
+    }
+}
