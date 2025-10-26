@@ -1,0 +1,46 @@
+1️⃣ Включение DEBUG для планировщика задач
+docker exec -it keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect \
+  --command="/subsystem=logging/logger=org.keycloak.services.scheduled:add(level=DEBUG)"
+
+
+org.keycloak.services.scheduled — пакет планировщика.
+
+level=DEBUG — подробные логи, будут показываться Next run и SQL-запросы.
+
+2️⃣ Проверка текущих логов
+
+Если контейнер старый, то логи в:
+
+/opt/jboss/keycloak/standalone/log/server.log
+
+
+Можно смотреть:
+
+docker exec -it keycloak tail -f /opt/jboss/keycloak/standalone/log/server.log | grep -i "Next run"
+
+
+Так можно увидеть все задачи и их время следующего запуска.
+
+3️⃣ Возврат уровня логов обратно
+docker exec -it keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect \
+  --command="/subsystem=logging/logger=org.keycloak.services.scheduled:remove()"
+
+
+Удаляем кастомный logger → Root Logger или глобальный уровень INFO восстанавливается.
+
+4️⃣ Дополнительно: вывод всех планировщиков с таблицей
+
+Если внутри контейнера нет column:
+
+docker exec -it keycloak bash -c '\
+tail -n 500 /opt/jboss/keycloak/standalone/log/server.log | grep -i "Next run" | \
+while read l; do echo "$l" | cut -d"]" -f2 | sed "s/Next run scheduled at/\t/"; done
+'
+
+
+Пример вывода:
+
+UserSessionReaper                  2025-10-26 00:00:00
+ClientSessionReaper                2025-10-26 00:00:00
+ExpiredOfflineUserSessionCleaner   2025-10-26 00:00:00
+ActionTokenReaper                  2025-10-26 00:00:00
