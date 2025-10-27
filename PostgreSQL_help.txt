@@ -1,0 +1,324 @@
+полный набор команд и проверок для PostgreSQL в конфигурации Primary / Standby (streaming replication). Всё разбито по категориям: что запускать на Primary, что на Standby, общие сетевые/сервисные проверки, операции на случай проблем, проверки содержимого/консистентности и советы по интерпретации. Для каждой команды — краткое описание и ожидаемый результат или что означают разные варианты вывода.
+
+Совет: запускать команды от root с sudo -u postgres или непосредственно под пользователем postgres, чтобы избежать проблем аутентификации.
+
+Основные проверки статуса сервиса и сети
+
+(выполнять на каждом сервере отдельно)
+
+# Проверить статус сервиса PostgreSQL
+sudo systemctl status postgresql-16 -l
+# Ожидаемый: active (running). Если failed — смотреть journalctl.
+
+# Просмотреть последние строки лога systemd/journal для PostgreSQL
+sudo journalctl -u postgresql-16 -n 200 --no-pager
+# Ожидаемый: нет FATAL ошибок, нет отказа доступа к PG_VERSION и т.п.
+
+# Проверить прослушиваемые сокеты (TCP)
+sudo ss -lntp | grep 5432
+# Ожидаемый на primary: 0.0.0.0:5432 (или конкретный IP) и [::]:5432
+# Ожидаемый на standby: тоже может слушать, но часто слушает 127.0.0.1/::1 при standby-only конфигурации;
+# если слушает только 127.0.0.1 — удалённые подключения к этому экземпляру невозможны.
+
+1) Как определить — кто Primary, кто Standby
+
+Выполнить на каждом сервере:
+
+sudo -u postgres psql -c "SELECT pg_is_in_recovery();"
+
+
+Результат t → сервер Standby (в режиме восстановления).
+
+Результат f → сервер Primary (обычно read-write).
+
+На Primary дополнительно:
+
+sudo -u postgres psql -c "SELECT now(), pg_current_wal_lsn(), pg_last_wal_replay_lsn();"
+
+
+pg_current_wal_lsn() — текущая позиция WAL на primary.
+
+2) Состояние подключённых реплик (на Primary)
+sudo -u postgres psql -c "SELECT pid, client_addr, client_hostname, application_name, state, sync_state,
+  sent_lsn, write_lsn, flush_lsn, replay_lsn, write_lag, flush_lag, replay_lag
+FROM pg_stat_replication;"
+
+
+Ожидаемый:
+
+Для каждой standby — state = streaming.
+
+sync_state = sync / async / potential (в зависимости от настройки synchronous_standby_names).
+
+sent_lsn ≥ write_lsn ≥ flush_lsn ≥ replay_lsn. Малые/нулевые разницы — хорошо.
+
+3) Состояние WAL-ресивера (на Standby)
+sudo -u postgres psql -c "SELECT pid, status, receive_start_lsn, received_lsn, replay_lsn, latest_end_lsn,
+  last_msg_send_time, last_msg_receipt_time FROM pg_stat_wal_receiver;"
+
+
+Ожидаемый:
+
+status = streaming.
+
+received_lsn и replay_lsn близки к pg_current_wal_lsn() на primary (см. ниже).
+
+4) Проверка задержки репликации (lag)
+
+Несколько вариантов:
+
+A) По времени последней применённой транзакции:
+
+# На standby
+sudo -u postgres psql -c "SELECT now() - pg_last_xact_replay_timestamp() AS replication_delay;"
+
+
+Малое значение (секунды или миллисекунды) — OK. NULL означает, что ничего ещё не применялось.
+
+B) Сравнить LSN между primary и standby:
+
+# На primary: запомнить LSN
+sudo -u postgres psql -c "SELECT pg_current_wal_lsn() AS primary_lsn;"
+# На standby:
+sudo -u postgres psql -c "SELECT pg_last_wal_replay_lsn() AS standby_replay_lsn;"
+# Сравнить — разница показывает сколько WAL ещё не применено.
+
+
+C) В байтах (примерная оценка)
+
+-- на primary
+SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS bytes_lag
+  FROM (SELECT pg_last_wal_replay_lsn() AS replay_lsn) s;
+
+
+(Запустить на primary, где replay_lsn извлекается из pg_stat_replication for a particular standby.)
+
+5) Проверка слотов репликации (на Primary)
+sudo -u postgres psql -c "SELECT slot_name, plugin, slot_type, database, active, restart_lsn FROM pg_replication_slots;"
+
+
+Ожидаемый:
+
+Если вы используете физические слоты — увидите slot_type = physical и active = true/false.
+
+Если слот не активен и restart_lsn далеко позади — возможно накопление WAL (reserved) и рост диска.
+
+6) Проверить настройки слушания и аутентификации
+# listen_addresses
+sudo -u postgres psql -c "SHOW listen_addresses;"
+# Ожидаемый: '*' или IP адрес(а) которые нужны для подключения standby.
+
+# pg_hba.conf — убедиться, что разрешены подключения репликации
+sudo -u postgres psql -c "SELECT * FROM pg_hba_file_rules WHERE type='host' ORDER BY line_no LIMIT 50;"
+# Альтернативно посмотреть файл:
+sudo -u postgres sed -n '1,200p' /var/lib/pgsql/16/data/pg_hba.conf
+
+
+Проверь, что для replication есть правило host replication replicator <standby_ip>/32 md5 (или scram-sha-256).
+
+7) Проверки WAL и архивирования
+# Текущий WAL LSN (primary)
+sudo -u postgres psql -c "SELECT pg_current_wal_lsn();"
+
+# Список WAL файлов в архиве (если включено archive_mode)
+ls -lh /var/lib/pgsql/16/archive | tail -n 20
+# Ожидаемый: видимые сегменты, если archive_mode=on.
+
+# Проверить checkpoint
+sudo -u postgres psql -c "SELECT checkpoint_time, checkpoint_lsn FROM pg_control_checkpoint();"
+
+8) Проверки сетевого соединения между серверами
+# На standby — тест TCP к primary:5432
+telnet 192.168.59.100 5432
+# или
+nc -vz 192.168.59.100 5432
+# Ожидаемый: Connected.
+
+# Проверить, что firewall разрешает порт 5432 на обоих узлах
+sudo firewall-cmd --zone=public --list-ports
+# Или:
+sudo iptables -L -n | grep 5432
+
+9) Примеры сценариев диагностики и команды реакции
+a) Если standby не подключается (на primary)
+# Посмотреть логи на primary
+sudo journalctl -u postgresql-16 -n 200 --no-pager | grep -i replication -i error -i reject
+
+# В psql на primary посмотреть попытки подключений:
+sudo -u postgres psql -c "SELECT * FROM pg_stat_activity WHERE backend_type = 'walsender';"
+
+
+Причины: неверный pg_hba.conf, primary_conninfo неверен, сеть, или роль репликации не имеет прав.
+
+b) Если standby стартует, но не в режиме recovery
+# На standby
+sudo -u postgres psql -c "SELECT pg_is_in_recovery();"
+# Если возвращает false — standby не в режиме recovery: проверь наличие standby.signal или recovery.signal,
+# проверь postgresql.auto.conf на primary_conninfo
+
+c) Если LSN растёт на primary, но standby отстаёт
+
+Проверить диск/IO, нагрузку, что wal_receiver не работает:
+
+# На standby
+sudo -u postgres psql -c "SELECT * FROM pg_stat_wal_receiver;"
+# На primary
+sudo -u postgres psql -c "SELECT now()-pg_last_xact_replay_timestamp() AS delay, * FROM pg_stat_replication;"
+
+10) Проверки данных / консистентности — сверка таблиц
+
+Для крупных БД полное сравнение не всегда возможно, но можно:
+
+A) Сравнить row counts для ключевых таблиц:
+
+# На primary
+sudo -u postgres psql -d keycloak -c "SELECT 'users' as t, count(*) FROM USER_ENTITY;"
+# На standby
+sudo -u postgres psql -d keycloak -c "SELECT 'users' as t, count(*) FROM USER_ENTITY;"
+# Ожидаемый: значения совпадают или различаются несущественно (время лага).
+
+
+B) Сравнить контрольные суммы (для небольших таблиц):
+
+# На primary
+sudo -u postgres psql -d keycloak -c "SELECT md5(array_agg(t.*)::text) FROM (SELECT * FROM small_table ORDER BY id) t;"
+# На standby — аналогично.
+# Ожидаемый: совпадают.
+
+
+Внимание: md5/array_agg подходы не подходят для больших таблиц; для них использовать выборочные проверки по PK.
+
+11) Команды аварийного переключения / восстановления (инструменты)
+
+(внимание: выполнять только если понимаете последствия)
+
+# Принудительное повышение standby (failover), делает standby primary
+sudo -u postgres /usr/pgsql-16/bin/pg_ctl promote -D /var/lib/pgsql/16/data
+
+# Перевести старый primary в standby после промоушена (предполагается pg_rewind)
+sudo -u postgres /usr/pgsql-16/bin/pg_rewind --target-pgdata=/var/lib/pgsql/16/data --source-server="host=<new_primary_ip> user=<superuser> dbname=postgres password='...'"
+# Затем запустить старый primary как standby:
+sudo systemctl start postgresql-16
+
+# Полностью пересоздать standby (если упал так, что WAL удалены)
+sudo systemctl stop postgresql-16
+sudo rm -rf /var/lib/pgsql/16/data/*
+sudo -u postgres pg_basebackup -h <primary_ip> -D /var/lib/pgsql/16/data -U replicator -P -R
+sudo systemctl start postgresql-16
+
+12) Управление слотами репликации
+# Создать слот (на primary)
+sudo -u postgres psql -c "SELECT * FROM pg_create_physical_replication_slot('slot1');"
+
+# Показать слоты
+sudo -u postgres psql -c "SELECT * FROM pg_replication_slots;"
+
+# Удалить слот
+sudo -u postgres psql -c "SELECT pg_drop_replication_slot('slot1');"
+
+
+Ожидаемый: если слот активен, active = t. Если не нужен, удаляй — иначе WAL будут накапливаться.
+
+13) Проверки прав/владельцев данных (частая причина проблем при ресторе/pg_rewind)
+# Проверить владельца каталога данных
+ls -ld /var/lib/pgsql/16/data
+# Ожидается: postgres:postgres
+
+# Исправить (если нужно)
+sudo chown -R postgres:postgres /var/lib/pgsql/16/data
+sudo chmod 700 /var/lib/pgsql/16/data
+
+14) Проверки конфигураций важные для репликации
+sudo -u postgres psql -c "SHOW wal_level;"
+# ожидается: replica или logical
+
+sudo -u postgres psql -c "SHOW max_wal_senders;"
+sudo -u postgres psql -c "SHOW max_replication_slots;"
+sudo -u postgres psql -c "SHOW hot_standby;"
+
+15) Мониторинг/постоянная проверка (быстрые скрипты)
+
+Простой цикл для здравия реплики (пример):
+
+# На primary: каждые 10s проверяем streaming state
+watch -n 10 "sudo -u postgres psql -c \"SELECT client_addr, state, sync_state, now()-pg_last_xact_replay_timestamp() AS delay FROM pg_stat_replication;\""
+
+
+Ожидаем state=streaming и маленький delay.
+
+16) Полезные запросы-подсказки
+-- Список баз и их размеров (primary)
+SELECT datname, pg_database_size(datname) FROM pg_database ORDER BY 2 DESC;
+
+-- На standby: проверить, какие архивационные WAL приняты/применены
+SELECT * FROM pg_stat_wal_receiver;
+
+-- На primary: время задержки по каждому standby (если available)
+SELECT application_name, client_addr,
+       COALESCE(pg_xlog_location_diff(pg_current_wal_lsn(), replay_lsn), 0) AS bytes_lag
+FROM pg_stat_replication;
+
+
+Заметка: в разных версиях функции могут называться pg_xlog_location_diff или pg_wal_lsn_diff / pg_wal_lsn_diff / pg_wal_lsn_diff — в PostgreSQL 16 использовать pg_wal_lsn_diff.
+
+17) Проверки после восстановления / миграции (когда вы делаете pg_restore)
+
+После восстановления в целевой базе (keycloak25) убедитесь, что данные применились и дошли до standby:
+
+На primary получить текущий LSN:
+
+sudo -u postgres psql -c "SELECT pg_current_wal_lsn();"
+
+
+На standby проверить pg_last_wal_replay_lsn() и / или now() - pg_last_xact_replay_timestamp(); ждать, пока replay_lsn приблизится к current_wal_lsn.
+
+Пример блокирующей проверки (ждать, пока replay_lsn >= target_lsn):
+
+# На standby можно опрашивать в цикле until cond true
+
+18) Команды для безопасного тестирования записи/чтения (на тестовой БД)
+
+На standby нельзя писать — проверку записи лучше делать на primary и затем проверять видимость на standby.
+
+# На primary
+sudo -u postgres psql -d testdb -c "CREATE TABLE IF NOT EXISTS rep_test(id serial primary key, t timestamptz default now()); INSERT INTO rep_test DEFAULT VALUES RETURNING id;"
+
+# На standby (через несколько секунд)
+sudo -u postgres psql -d testdb -c "SELECT * FROM rep_test ORDER BY id DESC LIMIT 5;"
+# Ожидается: новые строки видны.
+
+19) Что и когда логировать
+
+При диагностике держите под рукой:
+
+pg_stat_replication (primary)
+
+pg_stat_wal_receiver (standby)
+
+pg_replication_slots
+
+systemd/journalctl PostgreSQL логи
+
+системные метрики I/O и CPU (iostat, vmstat, top) — если реплика отстаёт из-за IO
+
+20) Краткий чек-лист «все ли в порядке»
+
+На primary: pg_is_in_recovery() → f.
+
+На standby: pg_is_in_recovery() → t.
+
+На primary: pg_stat_replication содержит standby с state = streaming.
+
+На standby: pg_stat_wal_receiver.status = streaming.
+
+now() - pg_last_xact_replay_timestamp() — минимально.
+
+pg_replication_slots — нет нескончаемо растущих слотов (если есть — проверить restart_lsn).
+
+WAL files не накапливаются в archive (если archive_mode=on) — проверка размера каталога archive.
+
+Конфигурация listen_addresses и pg_hba.conf корректна.
+
+Права на /var/lib/pgsql/16/data — postgres:postgres, chmod 700.
+
+Нет FATAL ошибок в журнале.
