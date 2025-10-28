@@ -1,5 +1,18 @@
 #!/bin/bash
 
+MONITOR_UID="999"
+echo "=== DEBUG PIDSTAT PARSING ==="
+pidstat -u 1 1 | while read line; do
+    if echo "$line" | grep -qE "^[0-9]{2}:[0-9]{2}:[0-9]{2} (AM|PM)[[:space:]]+$MONITOR_UID"; then
+        echo "FOUND: $line"
+        cpu_usage=$(echo "$line" | awk '{print $8}')
+        echo "CPU USAGE: $cpu_usage%"
+    fi
+done
+
+
+#!/bin/bash
+
 # НАСТРОЙКИ
 MONITOR_UID="999"
 ITERATION_COUNT=10
@@ -30,15 +43,3 @@ for ((i=1; i<=ITERATION_COUNT; i++)); do
     
     sleep "$INTERVAL"
 done
-
-
-#!/bin/bash
-
-MONITOR_UID="999"
-echo "=== DEBUG PIDSTAT OUTPUT ==="
-pidstat -u -r 1 1
-echo "=== FILTERED FOR UID $MONITOR_UID ==="
-pidstat -u -r 1 1 | grep -E "^[0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]]+$MONITOR_UID"
-echo "=== COLUMNS ==="
-pidstat -u -r 1 1 | grep -E "^[0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]]+$MONITOR_UID" | head -1 | cat -A
-
