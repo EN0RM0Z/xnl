@@ -1,45 +1,41 @@
 #!/bin/bash
 
-MONITOR_UID="999"
-echo "=== DEBUG PIDSTAT PARSING ==="
-pidstat -u 1 1 | while read line; do
-    if echo "$line" | grep -qE "^[0-9]{2}:[0-9]{2}:[0-9]{2} (AM|PM)[[:space:]]+$MONITOR_UID"; then
-        echo "FOUND: $line"
-        cpu_usage=$(echo "$line" | awk '{print $8}')
-        echo "CPU USAGE: $cpu_usage%"
-    fi
-done
-
-
-#!/bin/bash
-
 # НАСТРОЙКИ
-MONITOR_UID="999"
+PROCESS_NAMES="mariadb|mysql|mysqld"
 ITERATION_COUNT=10
 INTERVAL=5
-LOG_FILE="/opt/keycloak/scripts/cputest/logs/cpu_monitor.log"
-
-mkdir -p "$(dirname "$LOG_FILE")"
-
-# Получаем количество ядер процессора
-CPU_CORES=$(nproc)
 
 for ((i=1; i<=ITERATION_COUNT; i++)); do
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S.%3N')
+    clear
+    echo "=== Мониторинг CPU - Итерация $i/$ITERATION_COUNT ==="
+    echo "Время: $(date '+%H:%M:%S')"
+    echo ""
     
-    # Общая загрузка системы
-    system_cpu=$(top -bn1 | grep 'Cpu(s)' | awk '{printf "%.1f%%", $2 + $4}')
+    # Общая загрузка
+    echo "📊 ОБЩАЯ ЗАГРУЗКА:"
+    top -bn1 | grep "Cpu(s)" | awk '{print "  " $2 "% пользователь + " $4 "% система = " $2+$4 "% всего"}'
+    echo ""
     
-    # Использование CPU процессами пользователя (нормализованное на количество ядер)
-    user_cpu=$(ps -u "$MONITOR_UID" -o %cpu --no-headers 2>/dev/null | awk -v cores="$CPU_CORES" '{sum += $1} END {printf "%.1f", sum/cores}')
+    # Процессы
+    echo "🔍 ПРОЦЕССЫ ($PROCESS_NAMES):"
+    pids=$(pgrep -f "$PROCESS_NAMES")
     
-    process_count=$(ps -u "$MONITOR_UID" --no-headers 2>/dev/null | wc -l)
+    if [ -z "$pids" ]; then
+        echo "  Не найдены"
+    else
+        echo "  PID   %CPU   ПРОЦЕСС"
+        echo "  --------------------"
+        for pid in $pids; do
+            ps -p $pid -o pid=%cpu,comm --no-headers 2>/dev/null | awk '{print "  " $1 "   " $2 "%   " $3}'
+        done
+        
+        total_cpu=$(ps -p "$pids" -o %cpu --no-headers 2>/dev/null | awk '{sum += $1} END {printf "%.1f", sum}')
+        count=$(echo "$pids" | wc -w)
+        echo "  --------------------"
+        echo "  Всего: $count процессов, суммарно ${total_cpu}% CPU"
+    fi
     
-    # Вывод в лог файл
-    echo "$timestamp | Iteration: $i/$ITERATION_COUNT | UID: $MONITOR_UID | Processes: $process_count | User CPU: ${user_cpu}% | System CPU: $system_cpu" >> "$LOG_FILE"
-    
-    # Вывод в консоль
-    echo "Iteration $i: ${user_cpu}% CPU by $process_count processes (UID: $MONITOR_UID) | System: $system_cpu"
-    
+    echo ""
+    echo "⏳ Следующее обновление через $INTERVAL сек..."
     sleep "$INTERVAL"
 done
