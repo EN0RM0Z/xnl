@@ -124,3 +124,146 @@ UserParameter=log.exec.time.count, C:\zabbix\scripts\log_check_fixed_shared.bat 
 Если хотите сразу вызывать PowerShell без .bat, запись будет такой:
 
 UserParameter=log.exec.time.count,powershell -NoProfile -ExecutionPolicy Bypass -File "C:\zabbix\scripts\log_check_fixed_shared.ps1" -Sec $1
+
+
+
+===============
+
+<#=====================================================================
+  log_check_fixed_shared.ps1
+  ---------------------------------------------------------------
+  Пример скрипта, работающего только в PowerShell 2.0 (под Windows 2003).
+  Обрабатывает лишь последние N строк файла и считает, сколько из
+  них имеют execution time < 1000 мс (вариант “меньше”).
+  Если нужно считать >= 1000 мс – раскомментировать соответствующий блок.
+=====================================================================#>
+
+param(
+    # Сколько секунд «назад» смотреть (окно времени)
+    [int]$Sec = 10,          # например, 10 сек
+    # Сколько последних строк вырезать из файла (чтобы не читать полностью)
+    [int]$TailLines = 5000   # при необходимости измените
+)
+
+# -------------------------------------------------------------
+# 1. Путь к лог‑файлу (жёстко прописан – в рамках текущей задачи)
+# -------------------------------------------------------------
+$logPath = 'C:\logs\myapp.log'   # <-- замените на ваш реальный путь
+
+if (-not (Test-Path -LiteralPath $logPath -PathType Leaf)) {
+    Write-Error "Log file not found: $logPath"
+    exit 1
+}
+
+# -------------------------------------------------------------
+# 2. Функция "tail" – берёт последние N строк (только .NET, без
+#    Get‑Content -Tail, т.к. в PS 2.0 его нет)
+# -------------------------------------------------------------
+function Get-LastLines {
+    param(
+        [string]$Path,
+        [int]   $Count = 1000
+    )
+    # Открываем файл в режиме чтения, позволяя другим процессам писать
+    $fs = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite)
+
+    try {
+        $bufferSize = 4KB                       # читаем блоками
+        $encoding   = [System.Text.Encoding]::UTF8
+        $sb         = New-Object System.Text.StringBuilder
+        $position   = $fs.Length
+        $found      = 0
+        $result     = @()
+
+        while ($position -gt 0 -and $found -lt $Count) {
+            $readSize = [Math]::Min($bufferSize, $position)
+            $position -= $readSize
+            $fs.Seek($position, [System.IO.SeekOrigin]::Begin) | Out-Null
+
+            $bytes = New-Object byte[] $readSize
+            $fs.Read($bytes,0,$readSize) | Out-Null
+            $chunk = $encoding.GetString($bytes)
+
+            $sb.Insert(0,$chunk) | Out-Null
+
+            while ($sb.ToString() -match "(.*?(\r?\n|$))") {
+                $line = $Matches[1].TrimEnd("`r","`n")
+                $sb.Remove(0,$Matches[0].Length) | Out-Null
+                if ($line -ne "") {
+                    $result = ,$line + $result   # prepend (чтобы порядок был от старой к новой)
+                    $found++
+                    if ($found -ge $Count) { break }
+                }
+            }
+        }
+        return $result
+    }
+    finally { $fs.Close() }
+}
+
+# -------------------------------------------------------------
+# 3. Получаем последние $TailLines строк из лог‑файла
+# -------------------------------------------------------------
+$lines = Get-LastLines -Path $logPath -Count $TailLines
+
+# -------------------------------------------------------------
+# 4. Подготовка к парсингу даты/времени
+# -------------------------------------------------------------
+$targetSub = '] execution time: '
+$cnt       = 0                                 # счётчик подходящих строк
+$now       = Get-Date
+$cutOff    = $now.AddSeconds(-$Sec)            # граница окна
+
+# Формат даты в логе: 2024-10-04 20:25:19,442
+$regexDate = '^(?<d>\d{4}-\d{2}-\d{2})\s+(?<t>\d{2}:\d{2}:\d{2}),\d{3}'
+$culture   = [System.Globalization.CultureInfo]::InvariantCulture
+$dtFormat  = 'yyyy-MM-dd HH:mm:ss'
+
+# -------------------------------------------------------------
+# 5. Обрабатываем строки
+# -------------------------------------------------------------
+foreach ($line in $lines) {
+
+    # 5.1 Фильтруем по подстроке, чтобы не парсить лишнее
+    if (-not $line.Contains($targetSub)) { continue }
+
+    # 5.2 Выделяем дату‑время из начала строки
+    $m = [regex]::Match($line,$regexDate)
+    if (-not $m.Success) { continue }
+
+    $dateTimeStr = "$($m.Groups['d'].Value) $($m.Groups['t'].Value)"
+    try {
+        $dateTime = [datetime]::ParseExact($dateTimeStr,$dtFormat,$culture)
+    } catch { continue }
+
+    # 5.3 Оставляем только записи из окна $Sec секунд
+    if ($dateTime -lt $cutOff) { continue }
+
+    # 5.4 Получаем число после "] execution time: "
+    $after    = $line.Substring($line.IndexOf($targetSub) + $targetSub.Length).Trim()
+    $numMatch = [regex]::Match($after,'^\d+')
+    if (-not $numMatch.Success) { continue }
+
+    $execMs = [int]$numMatch.Value
+
+    # ---------------------------------------------------------
+    # 5.5 *** УСЛОВИЕ СЧЁТЧИКА ***
+    # ---------------------------------------------------------
+    # Вариант 1 – **меньше** 1000 мс (текущий активный вариант)
+    if ($execMs -lt 1000) { $cnt++ }
+
+    # Вариант 2 – **больше или равно** 1000 мс
+    # (раскомментируйте строку ниже и закомментируйте предыдущую)
+    # if ($execMs -ge 1000) { $cnt++ }
+}
+
+# -------------------------------------------------------------
+# 6. Вывод результата (Zabbix читает stdout)
+# -------------------------------------------------------------
+Write-Output $cnt
+exit 0
+
