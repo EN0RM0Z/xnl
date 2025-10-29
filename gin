@@ -1,0 +1,126 @@
+1️⃣ PowerShell‑скрипт log_check_fixed_shared.ps1
+Важно – путь к файлу логов прописан внутри скрипта (единственный путь для всех хостов). В параметре передаётся только количество секунд.
+
+<#=====================================================================
+  log_check_fixed_shared.ps1
+  ---------------------------------------------------------------
+  Читает лог‑файл, не блокируя его для записи другими процессами.
+  Фиксированный путь к файлу; в параметре указывается только окно
+  времени в секундах.
+=====================================================================#>
+
+param(
+    [Parameter(Mandatory=$true, Position=0)]
+    [int]$Sec               # Сколько секунд «назад» от текущего момента
+)
+
+# --------------------------------------------------------------
+# 1. Жёстко заданный путь к лог‑файлу
+# --------------------------------------------------------------
+$logPath = 'C:\logs\myapp.log'   # <--- УКАЖИТЕ СВОЙ ПОЛНЫЙ ПУТЬ !!!
+
+if (-not (Test-Path -LiteralPath $logPath -PathType Leaf)) {
+    Write-Error "Log file not found: $logPath"
+    exit 1
+}
+
+# --------------------------------------------------------------
+# 2. Временная граница (только записи новее)
+# --------------------------------------------------------------
+$now    = Get-Date
+$cutOff = $now.AddSeconds(-$Sec)
+
+# --------------------------------------------------------------
+# 3. Подготовка шаблонов и переменных
+# --------------------------------------------------------------
+$regexDate   = '^(?<d>\d{4}-\d{2}-\d{2})\s+(?<t>\d{2}:\d{2}:\d{2}),\d{3}'
+$targetSub   = '] execution time: '
+
+$cnt = 0
+
+# --------------------------------------------------------------
+# 4. Открываем файл в режиме Shared (ReadWrite) и читаем построчно
+# --------------------------------------------------------------
+# FileMode.Open   – открыть существующий файл
+# FileAccess.Read – только чтение
+# FileShare.ReadWrite – разрешаем другим процессам писать в файл одновременно
+$fs   = [System.IO.File]::Open($logPath,
+                               [System.IO.FileMode]::Open,
+                               [System.IO.FileAccess]::Read,
+                               [System.IO.FileShare]::ReadWrite)
+
+try {
+    $sr = New-Object System.IO.StreamReader($fs)
+
+    while (($line = $sr.ReadLine()) -ne $null) {
+        # 4.1 Быстрая проверка наличия нужной подстроки
+        if (-not $line.Contains($targetSub)) { continue }
+
+        # 4.2 Выделяем дату‑время в начале строки
+        $m = [regex]::Match($line, $regexDate)
+        if (-not $m.Success) { continue }
+
+        $dateTimeStr = "$($m.Groups['d'].Value) $($m.Groups['t'].Value)"
+        $format = 'yyyy-MM-dd HH:mm:ss'
+        $culture = [System.Globalization.CultureInfo]::InvariantCulture
+
+        try {
+            $dateTime = [datetime]::ParseExact($dateTimeStr, $format, $culture)
+        } catch {
+            continue
+        }
+
+        # 4.3 Оставляем только записи новее cutOff
+        if ($dateTime -lt $cutOff) { continue }
+
+        # 4.4 Считываем число после "] execution time: "
+        $after = $line.Substring($line.IndexOf($targetSub) + $targetSub.Length).Trim()
+        $numMatch = [regex]::Match($after, '^\d+')
+        if (-not $numMatch.Success) { continue }
+
+        $execMs = [int]$numMatch.Value
+        if ($execMs -gt 1000) { $cnt++ }
+    }
+}
+finally {
+    # Закрываем только после полного чтения; закрытие не блокирует запись.
+    $sr.Close()
+    $fs.Close()
+}
+
+# --------------------------------------------------------------
+# 5. Возврат результата
+# --------------------------------------------------------------
+Write-Output $cnt
+exit 0
+Ключевые моменты, обеспечивающие «non‑blocking»
+Строка	Что делает
+[System.IO.File]::Open(..., FileShare.ReadWrite)	Открывает файл для чтения, но разрешает другим процессам писать в него одновременно.
+StreamReader.ReadLine()	Читает последовательно, не захватывает файл полностью.
+finally { $sr.Close(); $fs.Close(); }	После завершения чтения освобождает дескриптор – но пока читаем, запись другими процессами продолжается без конфликтов.
+2️⃣ Batch‑обёртка (необязательно)
+Если хотите вызывать скрипт через .bat, оставляем лёгкую «обёртку». Путь к новому PowerShell‑скрипту меняем.
+
+@echo off
+::=====================================================================
+:: log_check_fixed_shared.bat
+::   Wrapper for log_check_fixed_shared.ps1 (shared‑read mode)
+::   Параметр %1 – количество секунд (окно просмотра)
+::=====================================================================
+
+if "%~1"=="" (
+    echo 0
+    exit /b 1
+)
+
+rem Путь к скрипту (в том же каталоге)
+set "SCRIPT=%~dp0log_check_fixed_shared.ps1"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" -Sec %~1
+exit /b 0
+3️⃣ Добавляем UserParameter в zabbix_agentd.conf
+# Один параметр – количество секунд, путь к файлу уже жёстко задан в скрипте
+UserParameter=log.exec.time.count, C:\zabbix\scripts\log_check_fixed_shared.bat $1
+Если хотите сразу вызывать PowerShell без .bat, запись будет такой:
+
+UserParameter=log.exec.time.count,powershell -NoProfile -ExecutionPolicy Bypass -File "C:\zabbix\scripts\log_check_fixed_shared.ps1" -Sec $1
