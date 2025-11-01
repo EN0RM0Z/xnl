@@ -1,4 +1,45 @@
+Минимальные команды: 
+
+1. Проверка синхронности баз (Primary - Standby)
+
+На основном (Primary):
+
+sudo -u postgres psql -c "SELECT client_addr, state, sync_state, pg_wal_lsn_diff(sent_lsn, replay_lsn) AS lag_bytes FROM pg_stat_replication;"
+
+
+Что смотреть:
+
+client_addr — IP standby.
+
+state = streaming — активная репликация.
+
+sync_state = sync или async — тип репликации.
+
+lag_bytes = 0 -> базы полностью синхронизированы.
+Если число > 0 и растёт — standby отстаёт.
+
+Эта одна команда даёт стопроцентное понимание состояния репликации.
+
+2. роверка наличия соединений к базе (любые клиенты)
+
+На любом сервере:
+
+sudo -u postgres psql -c "SELECT datname, usename, client_addr, state FROM pg_stat_activity WHERE client_addr IS NOT NULL;"
+
+
+Что смотреть:
+
+Показывает все активные подключения (включая standby, приложения и админов).
+
+В списке обязательно будет client_addr standby-сервера, если реплика подключена.
+
+Если список пуст — нет активных внешних соединений.
+
+==============================================
+
+
 1. Проверка активных соединений к базе
+
 ✅ Через SQL внутри PostgreSQL
 
 Подключаемся:
