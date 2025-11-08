@@ -49,3 +49,45 @@ curl -s -X POST "$OLLAMA_URL" \
 
 echo
 
+
+
+
+===================
+
+#!/bin/bash
+# Скрипт для передачи сводки логов в Ollama
+
+# Проверяем наличие файла
+if [ -z "$1" ]; then
+  echo "Использование: $0 <путь_к_файлу_с_сводкой>"
+  exit 1
+fi
+
+SUMMARY_FILE="$1"
+
+if [ ! -f "$SUMMARY_FILE" ]; then
+  echo "Ошибка: файл '$SUMMARY_FILE' не найден."
+  exit 1
+fi
+
+# Настройки Ollama
+MODEL="llama3"
+OLLAMA_URL="http://olama-srv:11434/api/generate"
+
+# Промт к модели
+PROMPT="Ты аналитик системных логов Linux. Перед тобой сводка журнала системы.
+Найди закономерности, необычные события, аномалии и дай краткий, понятный отчёт."
+
+# Читаем сводку
+SUMMARY_TEXT=$(cat "$SUMMARY_FILE")
+
+# Формируем одну переменную с промтом и текстом сводки
+FULL_PROMPT="$PROMPT"$'\n\n'"$SUMMARY_TEXT"
+
+# Отправляем в Ollama
+jq -n --arg model "$MODEL" --arg prompt "$FULL_PROMPT" \
+  '{model:$model, prompt:$prompt}' \
+  | curl -s -X POST "$OLLAMA_URL" \
+      -H "Content-Type: application/json" \
+      --data-binary @- \
+  | jq -r '.response? // empty'
