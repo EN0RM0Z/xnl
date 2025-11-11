@@ -1,0 +1,54 @@
+Пример структуры твоего файла /etc/nginx/conf.d/keycloak.conf
+
+Обычно он выглядит примерно так:
+
+server {
+    listen 443 ssl;
+    server_name keycloak.ru;
+
+    ssl_certificate     /etc/nginx/ssl/keycloak.crt;
+    ssl_certificate_key /etc/nginx/ssl/keycloak.key;
+
+    access_log /var/log/nginx/keycloak_access.log;
+    error_log  /var/log/nginx/keycloak_error.log;
+
+    # === вот сюда добавляем твой спец-локейшен ===
+    location ~* ^/auth/admin/realms/archive/users\?q=empid(:|%3A)33503$ {
+        default_type application/json;
+        add_header Cache-Control no-cache;
+        alias /opt/nginx/static/keycloak_user_33503.json;
+    }
+
+    # === основной прокси в Keycloak ===
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+
+
+ Почему именно перед location /?
+
+Потому что location / перехватывает все запросы по умолчанию.
+Если твой спец-location стоит после него, он уже не сработает — запрос уйдёт в Keycloak через proxy_pass.
+
+Как проверить, что всё верно
+
+После редактирования:
+
+sudo nginx -t
+sudo systemctl reload nginx
+
+
+Проверка результата:
+
+curl -k https://keycloak.ru/auth/admin/realms/archive/users?q=empid%3A33503
+
+
+Ты должен получить содержимое из /opt/nginx/static/keycloak_user_33503.json,
+а не реальный ответ от Keycloak.
+
+
+
