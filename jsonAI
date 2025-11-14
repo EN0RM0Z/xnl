@@ -25,3 +25,27 @@ return {
         readableText: fullResponse
     }
 };
+
+
+
+==========================
+
+// Входные данные из предыдущей ноды AI
+let rawText = $json.readableText; // сюда подставьте поле с сырым текстом
+
+// 1. Заменяем все странные символы (\п, \r) на нормальный перенос строки
+rawText = rawText.replace(/\\п/g, '\n');       // заменяем \п на перенос строки
+rawText = rawText.replace(/\\r/g, '');         // убираем лишние \r
+rawText = rawText.replace(/\\n/g, '\n');       // заменяем \n на перенос строки
+rawText = rawText.replace(/'''+/g, '');        // убираем тройные апострофы
+rawText = rawText.replace(/""+/g, '"');        // убираем лишние двойные кавычки
+
+// 2. Дополнительно убираем лишние пробелы в начале/конце строк
+rawText = rawText.split('\n').map(line => line.trim()).join('\n');
+
+// 3. Возвращаем чистый читаемый текст
+return {
+    json: {
+        cleanText: rawText
+    }
+};
