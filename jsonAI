@@ -1,0 +1,27 @@
+// Входные данные из предыдущей ноды AI
+const rawText = $json.aiResponse; // сюда подставьте поле с сырыми данными
+
+// Разбиваем на строки
+const lines = rawText.split("\n");
+
+// Массив для хранения содержимого
+let fullResponse = "";
+
+// Проходим по каждой строке
+for (const line of lines) {
+    try {
+        const obj = JSON.parse(line);
+        if (obj.response) {
+            fullResponse += obj.response;
+        }
+    } catch (e) {
+        // Игнорируем ошибки парсинга (например пустые строки)
+    }
+}
+
+// Возвращаем единый текст
+return {
+    json: {
+        readableText: fullResponse
+    }
+};
