@@ -49,3 +49,46 @@ return {
         cleanText: rawText
     }
 };
+
+
++++++++++++++++++++++
+
+// Входные данные AI: потоковый вывод в виде строки
+const rawText = $json.aiResponse; // подставьте сюда поле с сырым текстом
+
+// 1. Разбиваем на строки и собираем только поле response
+const lines = rawText.split("\n");
+let combinedText = "";
+
+for (const line of lines) {
+    try {
+        const obj = JSON.parse(line);
+        if (obj.response) {
+            combinedText += obj.response;
+        }
+    } catch(e) {
+        // игнорируем строки, которые не являются JSON
+    }
+}
+
+// 2. Заменяем нестандартные символы на реальные переносы строк
+let cleanText = combinedText
+    .replace(/\\п/g, '\r\n')    // заменяем \п на перенос строки
+    .replace(/\\r/g, '')        // убираем лишние \r
+    .replace(/\\n/g, '\r\n')    // заменяем \n на перенос строки
+    .replace(/'''+/g, '')       // убираем тройные апострофы
+    .replace(/""+/g, '"');      // убираем лишние двойные кавычки
+
+// 3. Обрезаем пробелы в начале и конце каждой строки
+cleanText = cleanText
+    .split('\r\n')
+    .map(line => line.trim())
+    .join('\r\n');
+
+// 4. Возвращаем чистый текст
+return {
+    json: {
+        readableText: cleanText
+    }
+};
+
