@@ -1,0 +1,68 @@
+Информация о Qdrant
+curl -s "http://Qdrant:6333"
+
+Список коллекций:
+curl -L -X GET 'http://192.168.59.150:6333/collections'
+
+Информация о коллекции keycloak_logs
+curl -X GET "http://192.168.59.150:6333/collections/keycloak_logs"
+
+Содержимое коллекции keycloak_logs
+curl -L -X POST 'http://192.168.59.150:6333/collections/keycloak_logs/points/scroll' \
+-H 'Content-Type: application/json' \
+-d '{
+    "limit": 10,
+    "with_payload": true
+  }'
+
+
+# Удаление коллекции
+curl -X DELETE "http://192.168.59.150:6333/collections/keycloak_logs"
+
+создание коллекции
+curl -L -X PUT 'http://192.168.59.150:6333/collections/keycloak_logs' \
+-H 'Content-Type: application/json' \
+-d '{"vectors": {"size": 768, "distance": "Cosine"}}'
+
+
+curl -L -X PUT 'http://192.168.59.150:6333/collections/keycloak_logs' \
+-H 'Content-Type: application/json' \
+-d '{"vectors": {"size": 3684, "distance": "Cosine"}}'
+
+
+
+# После запуска Workflow пересоздания коллекции проверьте:
+curl -s http://localhost:6333/collections | jq .
+
+# Должны увидеть пустую коллекцию:
+# {
+#   "result": {
+#     "collections": [
+#       {
+#         "name": "log_chunks",
+#         ...
+#       }
+#     ]
+#   },
+#   "status": "ok"
+# }
+
+# Проверьте что коллекция пустая:
+curl -s http://localhost:6333/collections/log_chunks | jq '.result.vectors_count'
+# Должно вернуть 0
+
+
+
+
+Проверка embeddings
+на http://ollama:11434/api/embeddings
+
+curl -X POST http://192.168.59.150:11434/api/embeddings \
+   -H "Content-Type: application/json" \
+   -d '{
+        "model": "nomic-embed-text",
+        "prompt": "hello world"
+       }'
+
+
+curl -s http://192.168.59.150:11434/api/version
