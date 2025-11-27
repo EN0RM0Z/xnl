@@ -1,0 +1,7 @@
+Declare PtrSafe Function ShowWindow Lib "user32" (ByVal hWnd As LongPtr, ByVal nCmdShow As Long) As Long
+
+Sub MinimizePPT()
+    Dim hWnd As LongPtr
+    hWnd = Application.HWND
+    ShowWindow hWnd, 2 ' SW_MINIMIZE = 2
+End Sub
