@@ -1,0 +1,6 @@
+spi-connections-infinispan-cluster-name=kc-prod-cluster
+
+cache-sessions-max-count=50000
+cache-client-sessions-max-count=50000
+cache-offline-sessions-max-count=20000
+cache-offline-client-sessions-max-count=20000
