@@ -10,3 +10,10 @@ ache-max-entries.sessions=50000
 cache-max-entries.clientSessions=50000
 cache-max-entries.offlineSessions=20000
 cache-max-entries.offlineClientSessions=20000
+
+
+spi-connections-infinispan-quarkus-cluster-name=kc-prod-cluster
+spi-connections-infinispan-quarkus-cache-config-sessions={"memory":{"max-count":50000}}
+spi-connections-infinispan-quarkus-cache-config-client-sessions={"memory":{"max-count":50000}}
+spi-connections-infinispan-quarkus-cache-config-offline-sessions={"memory":{"max-count":20000}}
+spi-connections-infinispan-quarkus-cache-config-offline-client-sessions={"memory":{"max-count":20000}}
