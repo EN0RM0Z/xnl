@@ -17,3 +17,12 @@ spi-connections-infinispan-quarkus-cache-config-sessions={"memory":{"max-count":
 spi-connections-infinispan-quarkus-cache-config-client-sessions={"memory":{"max-count":50000}}
 spi-connections-infinispan-quarkus-cache-config-offline-sessions={"memory":{"max-count":20000}}
 spi-connections-infinispan-quarkus-cache-config-offline-client-sessions={"memory":{"max-count":20000}}
+
+
+./kc.sh start \
+  --cache-embedded-cluster-name=kc-prod-cluster \
+  --cache-embedded-sessions-max-count=50000 \
+  --cache-embedded-client-sessions-max-count=50000 \
+  --cache-embedded-offline-sessions-max-count=20000 \
+  --cache-embedded-offline-client-sessions-max-count=20000 \
+  --log-level=info
