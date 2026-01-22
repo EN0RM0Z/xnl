@@ -1,0 +1,2 @@
+-Dsun.security.krb5.debug=true
+-Djavax.security.auth.useSubjectCredsOnly=false
