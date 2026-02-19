@@ -1,0 +1,25 @@
+Function ИзГиперссылкиЧисло(c As Range) As Long
+    Dim f As String
+    Dim startPos As Long
+    Dim endPos As Long
+    Dim urlPart As String
+    
+    ' Берём текст формулы
+    f = c.FormulaLocal
+    
+    ' Ищем "/newsc/" в формуле
+    startPos = InStr(f, "/newsc/") + Len("/newsc/")
+    If startPos = 0 Then
+        ИзГиперссылкиЧисло = 0
+        Exit Function
+    End If
+    
+    ' Ищем конец числа (заканчивается на ")
+    endPos = InStr(startPos, f, """") - 1
+    
+    ' Выбираем число
+    urlPart = Mid(f, startPos, endPos - startPos + 1)
+    
+    ' Возвращаем как число
+    ИзГиперссылкиЧисло = CLng(urlPart)
+End Function
