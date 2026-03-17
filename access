@@ -1,0 +1,4 @@
+%t [%{i,X-Forwarded-For}, %h] %l (user:%u) - '%m %U' => %s (%b bytes) '%{i,User-Agent}' - [%I, %Dms]
+
+%t [%{i,X-Forwarded-For}, %h] %l - '%m %U %H' => %s (%b bytes) '%{i,User-Agent}' - [%I, %Dms]
+%t [%{i,X-Forwarded-For}, %h] %l (user:%u) - '%m %U %H' => %s (%b bytes) '%{i,User-Agent}' - [%I, %Dms]
