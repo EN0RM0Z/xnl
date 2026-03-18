@@ -1,0 +1,2 @@
+docker.io/library/mariadb:10.6
+quay.io/keycloak/keycloak:25.0.6
