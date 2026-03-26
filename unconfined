@@ -1,0 +1,1 @@
+docker run --rm --security-opt seccomp=unconfined -e MYSQL_ROOT_PASSWORD=test mariadb:10.6
