@@ -1,0 +1,34 @@
+
+docker stop $(docker ps -a -q) && docker rm $(docker ps -a -q)
+
+docker run -d \
+  --name mariadb \
+  --network keycloak-network \
+  -v /var/lib/mariadb_data:/var/lib/mysql \
+  -e MYSQL_ROOT_PASSWORD=RootP@ssw0rd \
+  -e MYSQL_DATABASE=keycloak_db \
+  -e MYSQL_USER=keycloak_user \
+  -e MYSQL_PASSWORD=P@ssw0rd \
+  mariadb:10.6
+
+
+docker run -d \
+  --name keycloak \
+  --network keycloak-network \
+  -p 8080:8080 \
+  -v /opt/keycloak/logs:/opt/keycloak/data/log \
+  -e KC_DB=mariadb \
+  -e KC_DB_URL_HOST=mariadb \
+  -e KC_DB_URL_DATABASE=keycloak_db \
+  -e KC_DB_USERNAME=keycloak_user \
+  -e KC_DB_PASSWORD=P@ssw0rd \
+  -e KC_HEALTH_ENABLED=true \
+  -e KC_METRICS_ENABLED=true \
+  -e KC_LOG_LEVEL=INFO \
+  -e KC_LOG=console,file \
+  -e KC_LOG_FILE=/opt/keycloak/data/log/keycloak.log \
+  -e KEYCLOAK_ADMIN=admin \
+  -e KEYCLOAK_ADMIN_PASSWORD=admin \
+  -e KC_HOSTNAME=http://192.168.59.143:8080 \
+  -e KC_HOSTNAME_STRICT=false \
+  quay.io/keycloak/keycloak:25.0.6 start-dev
