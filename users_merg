@@ -1,0 +1,92 @@
+#!/bin/sh
+
+# ============================================
+# НАСТРОЙКИ
+# ============================================
+REALM_NAME="Group_role_test2"   # имя реалма (используется в имени файлов)
+INPUT_DIR="."                   # директория с файлами экспорта
+# ============================================
+
+# Проверка наличия jq
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Ошибка: jq не установлен. Установите jq (например, apt install jq)" >&2
+    exit 1
+fi
+
+# Выходные файлы
+LOCAL_OUTPUT="${INPUT_DIR}/local_users.csv"
+LDAP_OUTPUT="${INPUT_DIR}/ldap_users.csv"
+
+# Заголовки CSV
+HEADER="\"id\",\"username\",\"firstName\",\"lastName\",\"email\",\"enabled\",\"emailVerified\",\"federatedIdentities\",\"LDAP_ID\""
+
+echo "$HEADER" > "$LOCAL_OUTPUT"
+echo "$HEADER" > "$LDAP_OUTPUT"
+
+escape_quotes() {
+    echo "$1" | sed 's/"/""/g'
+}
+
+# Обработка всех файлов по шаблону ${REALM_NAME}-users-*.json
+for file in "$INPUT_DIR"/"${REALM_NAME}"-users-*.json; do
+    [ -f "$file" ] || continue
+    echo "Обрабатывается $file" >&2
+
+    # Проверяем, является ли содержимое файла массивом JSON
+    if jq -e 'type == "array"' "$file" >/dev/null 2>&1; then
+        # Файл - массив, обрабатываем каждый элемент
+        jq -c '.[]' "$file" | while read -r user; do
+            process_user "$user"
+        done
+    else
+        # Пробуем читать построчно (NDJSON)
+        echo "Файл не является массивом, пробуем читать построчно (NDJSON)" >&2
+        while read -r user; do
+            [ -z "$user" ] && continue
+            # Проверяем, что строка - валидный JSON объект
+            if echo "$user" | jq -e 'type == "object"' >/dev/null 2>&1; then
+                process_user "$user"
+            else
+                echo "Предупреждение: строка не является JSON объектом, пропускаем" >&2
+            fi
+        done < "$file"
+    fi
+done
+
+# Функция обработки одного пользователя
+process_user() {
+    user="$1"
+    # Определяем LDAP-пользователя
+    federationLink=$(echo "$user" | jq -r '.federationLink // ""')
+    federatedIdentities=$(echo "$user" | jq -c '.federatedIdentities // []')
+    if [ -n "$federationLink" ] || [ "$federatedIdentities" != "[]" ]; then
+        output="$LDAP_OUTPUT"
+        ldap_id="$federationLink"
+        if [ -z "$ldap_id" ] && [ "$federatedIdentities" != "[]" ]; then
+            ldap_id=$(echo "$user" | jq -r '.federatedIdentities[0].identityProvider // ""')
+        fi
+        fed_str=$(echo "$federatedIdentities" | jq -c . | sed 's/"/""/g')
+    else
+        output="$LOCAL_OUTPUT"
+        fed_str=""
+        ldap_id=""
+    fi
+
+    id=$(echo "$user" | jq -r '.id // ""')
+    username=$(echo "$user" | jq -r '.username // ""')
+    firstName=$(echo "$user" | jq -r '.firstName // ""')
+    lastName=$(echo "$user" | jq -r '.lastName // ""')
+    email=$(echo "$user" | jq -r '.email // ""')
+    enabled=$(echo "$user" | jq -r '.enabled // false')
+    emailVerified=$(echo "$user" | jq -r '.emailVerified // false')
+
+    username=$(escape_quotes "$username")
+    firstName=$(escape_quotes "$firstName")
+    lastName=$(escape_quotes "$lastName")
+    email=$(escape_quotes "$email")
+
+    echo "\"$id\",\"$username\",\"$firstName\",\"$lastName\",\"$email\",\"$enabled\",\"$emailVerified\",\"$fed_str\",\"$ldap_id\"" >> "$output"
+}
+
+echo "Готово. Локальные пользователи: $LOCAL_OUTPUT"
+echo "LDAP-пользователи: $LDAP_OUTPUT"
