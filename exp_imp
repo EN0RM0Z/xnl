@@ -1,0 +1,38 @@
+
+docker run --rm \
+  --name keycloak-export \
+  --network keycloak-network \
+  -v /opt/keycloak/export:/opt/keycloak/data/export \
+  -e KC_DB=mariadb \
+  -e KC_DB_URL_HOST=mariadb \
+  -e KC_DB_URL_DATABASE=keycloak_db \
+  -e KC_DB_USERNAME=keycloak_user \
+  -e KC_DB_PASSWORD=P@ssw0rd \
+  -e KC_DB_CONNECTION_TIMEOUT=300000 \
+  -e KC_DB_SOCKET_TIMEOUT=600000 \
+  quay.io/keycloak/keycloak:25.0.6 \
+  export \
+  --dir /opt/keycloak/data/export \
+  --realm qwer \
+  --users realm_file \
+  --users-per-file 1
+
+
+docker run --rm \
+  --name keycloak-import \
+  --network keycloak-network \
+  -v /opt/keycloak/import:/opt/keycloak/data/import \
+  -e KC_DB=mariadb \
+  -e KC_DB_URL_HOST=mariadb \
+  -e KC_DB_URL_DATABASE=keycloak_db \
+  -e KC_DB_USERNAME=keycloak_user \
+  -e KC_DB_PASSWORD=P@ssw0rd \
+  -e KC_DB_CONNECTION_TIMEOUT=300000 \
+  -e KC_DB_SOCKET_TIMEOUT=600000 \
+  quay.io/keycloak/keycloak:25.0.6 import \
+  --dir /opt/keycloak/data/import \
+  --override=true
+
+bin/kc.sh import \
+  --dir /путь/к/экспортированным/файлам \
+  --override true
