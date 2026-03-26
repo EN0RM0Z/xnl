@@ -1,0 +1,112 @@
+#!/bin/sh
+
+# Проверка наличия jq
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Ошибка: jq не установлен. Установите jq (например, apt install jq)" >&2
+    exit 1
+fi
+
+# Директория с файлами (первый аргумент, иначе текущая)
+DIR="${1:-.}"
+
+# Выходные файлы
+LOCAL_OUTPUT="local_users.csv"
+LDAP_OUTPUT="ldap_users.csv"
+
+# Заголовки CSV
+HEADER="\"id\",\"username\",\"firstName\",\"lastName\",\"email\",\"enabled\",\"emailVerified\",\"federatedIdentities\",\"LDAP_ID\""
+
+echo "$HEADER" > "$LOCAL_OUTPUT"
+echo "$HEADER" > "$LDAP_OUTPUT"
+
+# Функция для экранирования двойных кавычек в строке
+escape_quotes() {
+    echo "$1" | sed 's/"/""/g'
+}
+
+# Обработка всех файлов users_*.json
+for file in "$DIR"/users_*.json; do
+    [ -f "$file" ] || continue
+    echo "Обрабатывается $file" >&2
+
+    # Извлекаем массив пользователей из файла
+    jq -c '.[]' "$file" | while read -r user; do
+        # Определяем, является ли пользователь LDAP-импортированным
+        federationLink=$(echo "$user" | jq -r '.federationLink // ""')
+        federatedIdentities=$(echo "$user" | jq -c '.federatedIdentities // []')
+        if [ -n "$federationLink" ] || [ "$federatedIdentities" != "[]" ]; then
+            output="$LDAP_OUTPUT"
+            ldap_id="$federationLink"
+            # Если federationLink пуст, но есть federatedIdentities, возьмём identityProvider первого элемента
+            if [ -z "$ldap_id" ] && [ "$federatedIdentities" != "[]" ]; then
+                ldap_id=$(echo "$user" | jq -r '.federatedIdentities[0].identityProvider // ""')
+            fi
+            # Преобразуем federatedIdentities в строку с экранированием кавычек
+            fed_str=$(echo "$federatedIdentities" | jq -c . | sed 's/"/""/g')
+        else
+            output="$LOCAL_OUTPUT"
+            fed_str=""
+            ldap_id=""
+        fi
+
+        # Извлекаем поля пользователя
+        id=$(echo "$user" | jq -r '.id // ""')
+        username=$(echo "$user" | jq -r '.username // ""')
+        firstName=$(echo "$user" | jq -r '.firstName // ""')
+        lastName=$(echo "$user" | jq -r '.lastName // ""')
+        email=$(echo "$user" | jq -r '.email // ""')
+        enabled=$(echo "$user" | jq -r '.enabled // false')
+        emailVerified=$(echo "$user" | jq -r '.emailVerified // false')
+
+        # Экранируем кавычки в текстовых полях
+        username=$(escape_quotes "$username")
+        firstName=$(escape_quotes "$firstName")
+        lastName=$(escape_quotes "$lastName")
+        email=$(escape_quotes "$email")
+
+        # Формируем строку CSV
+        echo "\"$id\",\"$username\",\"$firstName\",\"$lastName\",\"$email\",\"$enabled\",\"$emailVerified\",\"$fed_str\",\"$ldap_id\"" >> "$output"
+    done
+done
+
+echo "Готово. Локальные пользователи: $LOCAL_OUTPUT"
+echo "LDAP-пользователи: $LDAP_OUTPUT"
+
+=======================
+
+#!/bin/sh
+
+# Проверка наличия jq
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Ошибка: jq не установлен. Установите jq (например, apt install jq)" >&2
+    exit 1
+fi
+
+# Директория с файлами (первый аргумент, иначе текущая)
+DIR="${1:-.}"
+
+# Выходной файл
+OUTPUT="users_export.csv"
+
+# Заголовки CSV (при необходимости измените набор полей)
+HEADER="\"id\",\"username\",\"firstName\",\"lastName\",\"email\",\"enabled\",\"emailVerified\""
+
+echo "$HEADER" > "$OUTPUT"
+
+# Обработка всех файлов users_*.json
+for file in "$DIR"/users_*.json; do
+    [ -f "$file" ] || continue
+    echo "Обрабатывается $file" >&2
+
+    jq -r '.[] | [
+        (.id // ""),
+        (.username // ""),
+        (.firstName // ""),
+        (.lastName // ""),
+        (.email // ""),
+        (.enabled // false),
+        (.emailVerified // false)
+    ] | map(gsub("\""; "\"\"")) | map("\"\(.)\"") | join(",")' "$file" >> "$OUTPUT"
+done
+
+echo "Готово. Результат сохранён в $OUTPUT"
