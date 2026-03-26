@@ -1,0 +1,25 @@
+1. Получение токена администратора
+bash
+TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
+  -d "client_id=admin-cli" \
+  -d "username=admin" \
+  -d "password=admin" \
+  -d "grant_type=password" | jq -r '.access_token')
+Если у вас другой пароль администратора (например, admin или другой), замените password=admin на актуальный.
+
+Проверьте, что переменная TOKEN заполнилась:
+
+bash
+echo $TOKEN
+2. Получить список пользователей с federationLink (для диагностики)
+bash
+curl -s -X GET "http://localhost:8080/admin/realms/ВАШ_РЕАЛМ/users?first=0&max=100" \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | {username, federationLink, id}'
+federationLink будет либо null (локальный пользователь), либо содержать ID компонента LDAP (импортированный).
+
+Если вы видите, что у многих пользователей federationLink не null, значит, они импортированы из LDAP.
+
+3. Получить только локальных пользователей (без LDAP)
+bash
+curl -s -X GET "http://localhost:8080/admin/realms/ВАШ_РЕАЛМ/users?first=0&max=100" \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | select(.federationLink == null) | {username, id}'
