@@ -1,0 +1,22 @@
+Фильтрация локальных пользователей (у которых нет attributes.federationLink):
+
+bash
+curl -s -X GET "http://localhost:8080/admin/realms/ВАШ_РЕАЛМ/users?first=0&max=100" \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | select(.attributes == null or (.attributes | has("federationLink") | not)) | {username, id}'
+Если атрибут может быть массивом, проверка has("federationLink") работает корректно.
+
+3. Альтернативный подход: получить только ID пользователей, у которых federationLink не пустой (импортированные), затем удалить
+Для удаления импортированных пользователей не обязательно фильтровать локальных; достаточно выполнить вызов API remove-imported-users, который удалит всех, у кого federationLink совпадает с ID компонента. Этот вызов должен работать независимо от структуры ответа.
+
+Если же вы хотите вручную удалить конкретных пользователей через API, то нужно сначала получить их ID.
+
+Получить всех пользователей с federationLink (импортированных) — предполагая, что поле на верхнем уровне:
+
+bash
+curl -s -X GET "http://localhost:8080/admin/realms/ВАШ_РЕАЛМ/users?first=0&max=100" \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | select(.federationLink != null) | .id'
+Если поле в attributes, то:
+
+bash
+curl -s -X GET "http://localhost:8080/admin/realms/ВАШ_РЕАЛМ/users?first=0&max=100" \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | select(.attributes and (.attributes | has("federationLink"))) | .id'
