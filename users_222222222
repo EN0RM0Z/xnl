@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# ============================================
+# НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К БАЗЕ ДАННЫХ (Docker)
+# ============================================
+DB_CONTAINER="mariadb"          # имя контейнера MariaDB
+DB_PORT="3306"
+DB_NAME="keycloak_db"
+DB_USER="keycloak_user"
+DB_PASS="P@ssw0rd"
+REALM_NAME="coins"              # имя реалма, для которого выгружаем пользователей (если пусто - все)
+# ============================================
+
+# Выходные файлы
+LOCAL_FILE="./local_users_db.csv"
+LDAP_FILE="./ldap_users_db.csv"
+HEADER="\"id\",\"username\",\"firstName\",\"lastName\",\"email\",\"enabled\",\"emailVerified\",\"federatedIdentities\",\"LDAP_ID\""
+
+echo "$HEADER" > "$LOCAL_FILE"
+echo "$HEADER" > "$LDAP_FILE"
+
+# Проверка, запущен ли контейнер
+if ! docker ps --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
+    echo "Ошибка: контейнер $DB_CONTAINER не запущен или не существует." >&2
+    exit 1
+fi
+
+# Получаем ID реалма, если указано имя
+if [ -n "$REALM_NAME" ]; then
+    REALM_ID=$(docker exec "$DB_CONTAINER" mysql -h"$DB_CONTAINER" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" -sN -e "SELECT id FROM REALM WHERE name='$REALM_NAME' LIMIT 1;")
+    if [ -z "$REALM_ID" ]; then
+        echo "Ошибка: реалм '$REALM_NAME' не найден в базе данных." >&2
+        exit 1
+    fi
+    echo "Выгружаем пользователей для реалма: $REALM_NAME (ID: $REALM_ID)"
+    REALM_FILTER="AND u.realm_id='$REALM_ID'"
+else
+    REALM_FILTER=""
+    echo "Выгружаем пользователей для всех реалмов"
+fi
+
+# SQL-запрос
+SQL_QUERY=$(cat <<EOF
+SELECT 
+    u.id,
+    u.username,
+    u.firstName,
+    u.lastName,
+    u.email,
+    u.enabled,
+    u.emailVerified,
+    f.identity_provider,
+    f.user_id,
+    f.user_name
+FROM USER_ENTITY u
+LEFT JOIN FEDERATED_IDENTITY f ON u.id = f.user_id
+WHERE 1=1 $REALM_FILTER
+ORDER BY u.username;
+EOF
+)
+
+# Выполняем запрос через docker exec
+docker exec "$DB_CONTAINER" mysql -h"$DB_CONTAINER" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" --batch --raw --skip-column-names -e "$SQL_QUERY" | while IFS=$'\t' read -r id username firstName lastName email enabled emailVerified identityProvider user_id user_name; do
+    if [ -n "$identityProvider" ]; then
+        output="$LDAP_FILE"
+        fed_json="[{\"identityProvider\":\"$identityProvider\",\"userId\":\"$user_id\",\"userName\":\"$user_name\"}]"
+        fed_str=$(echo "$fed_json" | sed 's/"/""/g')
+        ldap_id=$(echo "$identityProvider" | sed 's/"/""/g')
+    else
+        output="$LOCAL_FILE"
+        fed_str=""
+        ldap_id=""
+    fi
+
+    # Экранирование двойных кавычек
+    id_esc=$(echo "$id" | sed 's/"/""/g')
+    username_esc=$(echo "$username" | sed 's/"/""/g')
+    firstName_esc=$(echo "$firstName" | sed 's/"/""/g')
+    lastName_esc=$(echo "$lastName" | sed 's/"/""/g')
+    email_esc=$(echo "$email" | sed 's/"/""/g')
+
+    echo "\"$id_esc\",\"$username_esc\",\"$firstName_esc\",\"$lastName_esc\",\"$email_esc\",\"$enabled\",\"$emailVerified\",\"$fed_str\",\"$ldap_id\"" >> "$output"
+done
+
+echo "Готово. Локальные пользователи: $LOCAL_FILE"
+echo "LDAP-пользователи: $LDAP_FILE"
