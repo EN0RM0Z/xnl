@@ -1,0 +1,10 @@
+# Получить список столбцов USER_ENTITY
+docker exec mariadb mysql -ukeycloak_user -pP@ssw0rd keycloak_db -e "DESCRIBE USER_ENTITY;"
+
+# Получить список столбцов FEDERATED_IDENTITY
+docker exec mariadb mysql -ukeycloak_user -pP@ssw0rd keycloak_db -e "DESCRIBE FEDERATED_IDENTITY;"
+Если нужно посмотреть также таблицу REALM (для фильтрации по имени реалма):
+
+bash
+docker exec mariadb mysql -ukeycloak_user -pP@ssw0rd keycloak_db -e "DESCRIBE REALM;"
+
