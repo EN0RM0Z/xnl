@@ -1,0 +1,9 @@
+1. Проверка наличия непустых federation_link
+bash
+docker exec mariadb mysql -ukeycloak_user -pP@ssw0rd keycloak_db -e "SELECT username, federation_link FROM USER_ENTITY WHERE realm_id='coins' AND federation_link IS NOT NULL LIMIT 5;"
+2. Вывод сырых данных с табуляциями
+bash
+docker exec mariadb mysql -ukeycloak_user -pP@ssw0rd keycloak_db --batch --raw --skip-column-names -e "SELECT u.ID, u.USERNAME, u.FIRST_NAME, u.LAST_NAME, u.EMAIL, u.ENABLED, u.EMAIL_VERIFIED, u.FEDERATION_LINK FROM USER_ENTITY u WHERE u.REALM_ID = 'coins' LIMIT 2;" | cat -A
+3. Проверка количества полей
+bash
+docker exec mariadb mysql -ukeycloak_user -pP@ssw0rd keycloak_db -e "SELECT * FROM USER_ENTITY WHERE realm_id='coins' LIMIT 1\G"
