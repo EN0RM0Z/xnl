@@ -1,0 +1,74 @@
+#!/bin/bash
+
+# ====== НАСТРОЙКИ ======
+DB_CONTAINER="mariadb"
+DB_NAME="keycloak"
+DB_USER="keycloak"
+DB_PASSWORD="password"
+
+REALM_ID="myrealm"   # <-- ВАЖНО: укажи нужный realm
+
+OUTPUT_DIR="./export"
+mkdir -p "$OUTPUT_DIR"
+
+DATE=$(date +"%Y%m%d_%H%M%S")
+
+LDAP_FILE="$OUTPUT_DIR/ldap_users_${REALM_ID}_$DATE.csv"
+LOCAL_FILE="$OUTPUT_DIR/local_users_${REALM_ID}_$DATE.csv"
+
+HEADER="\"ID\";\"USERNAME\";\"EMAIL\";\"FIRST_NAME\";\"LAST_NAME\";\"FEDERATION_LINK\""
+
+# ====== ФУНКЦИЯ ВЫГРУЗКИ ======
+run_query() {
+  local QUERY=$1
+  local FILE=$2
+
+  echo $HEADER > "$FILE"
+
+  docker exec -i $DB_CONTAINER mysql \
+    -u$DB_USER -p$DB_PASSWORD -D $DB_NAME \
+    --batch --skip-column-names \
+    -e "$QUERY" >> "$FILE"
+}
+
+# ====== LDAP ПОЛЬЗОВАТЕЛИ ======
+LDAP_QUERY="
+SELECT CONCAT(
+  '\"', ID, '\";', 
+  '\"', USERNAME, '\";', 
+  '\"', IFNULL(EMAIL, ''), '\";', 
+  '\"', IFNULL(FIRST_NAME, ''), '\";', 
+  '\"', IFNULL(LAST_NAME, ''), '\";', 
+  '\"', FEDERATION_LINK, '\"'
+)
+FROM USER_ENTITY
+WHERE REALM_ID = '${REALM_ID}'
+  AND FEDERATION_LINK IS NOT NULL;
+"
+
+# ====== ЛОКАЛЬНЫЕ ПОЛЬЗОВАТЕЛИ ======
+LOCAL_QUERY="
+SELECT CONCAT(
+  '\"', ID, '\";', 
+  '\"', USERNAME, '\";', 
+  '\"', IFNULL(EMAIL, ''), '\";', 
+  '\"', IFNULL(FIRST_NAME, ''), '\";', 
+  '\"', IFNULL(LAST_NAME, ''), '\";', 
+  '\"', IFNULL(FEDERATION_LINK, ''), '\"'
+)
+FROM USER_ENTITY
+WHERE REALM_ID = '${REALM_ID}'
+  AND FEDERATION_LINK IS NULL;
+"
+
+echo "Экспорт пользователей realm: $REALM_ID"
+
+echo "→ LDAP пользователи..."
+run_query "$LDAP_QUERY" "$LDAP_FILE"
+
+echo "→ Локальные пользователи..."
+run_query "$LOCAL_QUERY" "$LOCAL_FILE"
+
+echo "Готово:"
+echo "LDAP:  $LDAP_FILE"
+echo "LOCAL: $LOCAL_FILE"
