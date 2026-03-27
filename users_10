@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# ============================================
+# НАСТРОЙКИ
+# ============================================
+DB_CONTAINER="mariadb"
+DB_PORT="3306"
+DB_NAME="keycloak_db"
+DB_USER="keycloak_user"
+DB_PASS="P@ssw0rd"
+REALM_NAME="coins"
+# ============================================
+
+LOCAL_FILE="./local_users.csv"
+LDAP_FILE="./ldap_users.csv"
+HEADER="id;username;firstName;lastName;email;enabled;emailVerified;LDAP_ID"
+
+echo "$HEADER" > "$LOCAL_FILE"
+echo "$HEADER" > "$LDAP_FILE"
+
+# Получаем ID реалма
+REALM_ID=$(docker exec "$DB_CONTAINER" mysql -h"$DB_CONTAINER" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" -sN -e "SELECT id FROM REALM WHERE name='$REALM_NAME' LIMIT 1;")
+if [ -z "$REALM_ID" ]; then
+    echo "Ошибка: реалм '$REALM_NAME' не найден." >&2
+    exit 1
+fi
+echo "Выгружаем пользователей реалма $REALM_NAME (ID: $REALM_ID)"
+
+# SQL-запрос
+SQL_QUERY="
+SELECT 
+    u.ID,
+    u.USERNAME,
+    u.FIRST_NAME,
+    u.LAST_NAME,
+    u.EMAIL,
+    u.ENABLED,
+    u.EMAIL_VERIFIED,
+    u.FEDERATION_LINK
+FROM USER_ENTITY u
+WHERE u.REALM_ID = '$REALM_ID'
+ORDER BY u.USERNAME;
+"
+
+# Временный файл для отладки
+DEBUG_LOG="./debug.log"
+echo "=== Начало обработки ===" > "$DEBUG_LOG"
+
+# Выполняем и читаем построчно
+docker exec "$DB_CONTAINER" mysql -h"$DB_CONTAINER" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" --batch --raw --skip-column-names -e "$SQL_QUERY" | while IFS=$'\t' read -r id username firstName lastName email enabled emailVerified federationLink; do
+    # Отладочный вывод в stderr и в файл
+    echo "Пользователь: $username" >&2
+    echo "federationLink = '$federationLink'" >&2
+    echo "Длина = ${#federationLink}" >&2
+    echo "Символы (шестнадцатерично):" >&2
+    echo -n "$federationLink" | od -An -tx1 >&2
+    
+    # Проверка условия
+    if [ -n "$federationLink" ] && [ "$federationLink" != "NULL" ]; then
+        echo "  -> LDAP-пользователь (federationLink не пуст и не 'NULL')" >&2
+        output="$LDAP_FILE"
+        ldap_id="$federationLink"
+    else
+        echo "  -> Локальный пользователь" >&2
+        output="$LOCAL_FILE"
+        ldap_id=""
+    fi
+    echo "" >&2
+
+    # Сохраняем в лог-файл
+    echo "USER: $username, FEDLINK: '$federationLink', IS_LDAP: $([ -n "$federationLink" ] && [ "$federationLink" != "NULL" ] && echo "YES" || echo "NO")" >> "$DEBUG_LOG"
+
+    # Экранируем двойные кавычки
+    id=$(echo "$id" | sed 's/"/""/g')
+    username=$(echo "$username" | sed 's/"/""/g')
+    firstName=$(echo "$firstName" | sed 's/"/""/g')
+    lastName=$(echo "$lastName" | sed 's/"/""/g')
+    email=$(echo "$email" | sed 's/"/""/g')
+    enabled=$(echo "$enabled" | sed 's/"/""/g')
+    emailVerified=$(echo "$emailVerified" | sed 's/"/""/g')
+    ldap_id=$(echo "$ldap_id" | sed 's/"/""/g')
+
+    # Записываем строку
+    echo "\"$id\";\"$username\";\"$firstName\";\"$lastName\";\"$email\";\"$enabled\";\"$emailVerified\";\"$ldap_id\"" >> "$output"
+done
+
+echo "Отладка сохранена в $DEBUG_LOG" >&2
+echo "Готово. Локальные пользователи: $LOCAL_FILE" >&2
+echo "LDAP-пользователи: $LDAP_FILE" >&2
