@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# ============================================
+# НАСТРОЙКИ
+# ============================================
+DB_CONTAINER="mariadb"
+DB_PORT="3306"
+DB_NAME="keycloak_db"
+DB_USER="keycloak_user"
+DB_PASS="P@ssw0rd"
+REALM_NAME="coins"
+# ============================================
+
+LOCAL_FILE="./local_users.csv"
+LDAP_FILE="./ldap_users.csv"
+HEADER="id;username;firstName;lastName;email;enabled;emailVerified;LDAP_ID"
+
+echo "$HEADER" > "$LOCAL_FILE"
+echo "$HEADER" > "$LDAP_FILE"
+
+# Получаем ID реалма
+REALM_ID=$(docker exec "$DB_CONTAINER" mysql -h"$DB_CONTAINER" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" -sN -e "SELECT id FROM REALM WHERE name='$REALM_NAME' LIMIT 1;")
+if [ -z "$REALM_ID" ]; then
+    echo "Ошибка: реалм '$REALM_NAME' не найден." >&2
+    exit 1
+fi
+echo "Выгружаем пользователей реалма $REALM_NAME (ID: $REALM_ID)"
+
+# SQL-запрос с правильными именами полей (регистр не важен, но для ясности пишем как в DESCRIBE)
+SQL_QUERY="
+SELECT 
+    u.ID,
+    u.USERNAME,
+    u.FIRST_NAME,
+    u.LAST_NAME,
+    u.EMAIL,
+    u.ENABLED,
+    u.EMAIL_VERIFIED,
+    u.FEDERATION_LINK
+FROM USER_ENTITY u
+WHERE u.REALM_ID = '$REALM_ID'
+ORDER BY u.USERNAME;
+"
+
+# Выполняем и читаем построчно, разделитель — табуляция
+docker exec "$DB_CONTAINER" mysql -h"$DB_CONTAINER" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" --batch --raw --skip-column-names -e "$SQL_QUERY" | while IFS=$'\t' read -r id username firstName lastName email enabled emailVerified federationLink; do
+    # Если federationLink не пустой и не NULL, то это LDAP-пользователь
+    if [ -n "$federationLink" ] && [ "$federationLink" != "NULL" ]; then
+        output="$LDAP_FILE"
+        ldap_id="$federationLink"
+    else
+        output="$LOCAL_FILE"
+        ldap_id=""
+    fi
+
+    # Экранируем двойные кавычки (заменяем " на "")
+    id=$(echo "$id" | sed 's/"/""/g')
+    username=$(echo "$username" | sed 's/"/""/g')
+    firstName=$(echo "$firstName" | sed 's/"/""/g')
+    lastName=$(echo "$lastName" | sed 's/"/""/g')
+    email=$(echo "$email" | sed 's/"/""/g')
+    enabled=$(echo "$enabled" | sed 's/"/""/g')
+    emailVerified=$(echo "$emailVerified" | sed 's/"/""/g')
+    ldap_id=$(echo "$ldap_id" | sed 's/"/""/g')
+
+    # Записываем строку с разделителем ";"
+    echo "\"$id\";\"$username\";\"$firstName\";\"$lastName\";\"$email\";\"$enabled\";\"$emailVerified\";\"$ldap_id\"" >> "$output"
+done
+
+echo "Готово. Локальные пользователи: $LOCAL_FILE"
+echo "LDAP-пользователи: $LDAP_FILE"
