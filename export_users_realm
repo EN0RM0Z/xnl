@@ -1,0 +1,84 @@
+#!/bin/bash
+
+# ============================================
+# НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К БАЗЕ ДАННЫХ (Docker)
+# ============================================
+DB_HOST="mariadb"                # имя контейнера MariaDB
+DB_PORT="3306"
+DB_NAME="keycloak_db"
+DB_USER="keycloak_user"
+DB_PASS="P@ssw0rd"
+DOCKER_NETWORK="keycloak-network" # сеть Docker, где находятся контейнеры
+
+# Имя реалма (оставьте пустым, чтобы выгрузить всех пользователей)
+REALM_NAME="Group_role_test2"    # или оставить "" для всех
+# ============================================
+
+# Выходные файлы
+LOCAL_FILE="./local_users.csv"
+LDAP_FILE="./ldap_users.csv"
+HEADER="\"id\",\"username\",\"firstName\",\"lastName\",\"email\",\"enabled\",\"emailVerified\",\"federatedIdentities\",\"LDAP_ID\""
+
+echo "$HEADER" > "$LOCAL_FILE"
+echo "$HEADER" > "$LDAP_FILE"
+
+# Формируем условие WHERE по реалму, если задан
+if [ -n "$REALM_NAME" ]; then
+    REALM_CONDITION="AND u.realm_id = (SELECT id FROM REALM WHERE name = '$REALM_NAME')"
+    echo "Выгружаем пользователей для реалма: $REALM_NAME"
+else
+    REALM_CONDITION=""
+    echo "Выгружаем всех пользователей"
+fi
+
+# SQL-запрос с фильтрацией по реалму
+SQL_QUERY=$(cat <<EOF
+SELECT 
+    u.id,
+    u.username,
+    u.firstName,
+    u.lastName,
+    u.email,
+    u.enabled,
+    u.emailVerified,
+    f.identity_provider,
+    f.user_id,
+    f.user_name
+FROM USER_ENTITY u
+LEFT JOIN FEDERATED_IDENTITY f ON u.id = f.user_id
+WHERE 1=1
+$REALM_CONDITION
+ORDER BY u.username;
+EOF
+)
+
+# Запускаем временный контейнер с mysql-client
+docker run --rm \
+    --network "$DOCKER_NETWORK" \
+    -e MYSQL_PWD="$DB_PASS" \
+    mysql:8 \
+    mysql -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USER" "$DB_NAME" \
+    --batch --raw --skip-column-names -e "$SQL_QUERY" | while IFS=$'\t' read -r id username firstName lastName email enabled emailVerified identityProvider user_id user_name; do
+    if [ -n "$identityProvider" ]; then
+        output="$LDAP_FILE"
+        fed_json="[{\"identityProvider\":\"$identityProvider\",\"userId\":\"$user_id\",\"userName\":\"$user_name\"}]"
+        fed_str=$(echo "$fed_json" | sed 's/"/""/g')
+        ldap_id=$(echo "$identityProvider" | sed 's/"/""/g')
+    else
+        output="$LOCAL_FILE"
+        fed_str=""
+        ldap_id=""
+    fi
+
+    # Экранирование двойных кавычек
+    id_esc=$(echo "$id" | sed 's/"/""/g')
+    username_esc=$(echo "$username" | sed 's/"/""/g')
+    firstName_esc=$(echo "$firstName" | sed 's/"/""/g')
+    lastName_esc=$(echo "$lastName" | sed 's/"/""/g')
+    email_esc=$(echo "$email" | sed 's/"/""/g')
+
+    echo "\"$id_esc\",\"$username_esc\",\"$firstName_esc\",\"$lastName_esc\",\"$email_esc\",\"$enabled\",\"$emailVerified\",\"$fed_str\",\"$ldap_id\"" >> "$output"
+done
+
+echo "Готово. Локальные пользователи: $LOCAL_FILE"
+echo "LDAP-пользователи: $LDAP_FILE"
