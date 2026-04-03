@@ -1,0 +1,35 @@
+#!/bin/bash
+
+DB_CONTAINER="mariadb"
+DB_NAME="keycloak"
+DB_USER="keycloak"
+DB_PASSWORD="password"
+
+OUTPUT_FILE="./realm_user_report_detailed.csv"
+
+HEADER="\"REALM\";\"SOURCE\";\"USERS_COUNT\""
+
+echo "Формируем детальный отчёт по realm и LDAP..."
+
+# BOM + header
+printf '\xEF\xBB\xBF%s\n' "$HEADER" > "$OUTPUT_FILE"
+
+read -r -d '' QUERY <<'EOF'
+SELECT CONCAT(
+  '"', r.NAME, '";',
+  '"', COALESCE(c.NAME, 'LOCAL'), '";',
+  '"', COUNT(u.ID), '"'
+)
+FROM REALM r
+LEFT JOIN USER_ENTITY u ON u.REALM_ID = r.ID
+LEFT JOIN COMPONENT c ON c.ID = u.FEDERATION_LINK
+GROUP BY r.NAME, COALESCE(c.NAME, 'LOCAL')
+ORDER BY r.NAME, COALESCE(c.NAME, 'LOCAL');
+EOF
+
+docker exec -i "$DB_CONTAINER" mysql \
+  -u"$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" \
+  --batch --skip-column-names \
+  -e "$QUERY" >> "$OUTPUT_FILE"
+
+echo "Готово: $OUTPUT_FILE"
