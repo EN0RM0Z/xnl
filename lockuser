@@ -7,7 +7,8 @@ $username = Read-Host "Введите SAMAccountName пользователя"
 try {
     # Получаем данные пользователя
     $user = Get-ADUser -Identity $username -Properties Enabled, LockedOut, AccountLockoutTime
-    
+    $user = Get-ADUser -Identity $username -Properties Enabled, LockedOut, AccountLockoutTime
+
     # Определяем цвета и текст через классический if/else
     if ($user.Enabled -eq $true) {
         $status = "Активна (Enabled)"
@@ -35,19 +36,17 @@ catch {
     Write-Host "Ошибка: Пользователь '$username' не найден в Active Directory." -ForegroundColor Yellow
 }
 
-$username = Read-Host "Введите SAMAccountName пользователя"
+$username = "petrovis" # Укажите здесь нужный логин
 
-# Ищем пользователя в Active Directory через базовый поиск .NET
+# Ищем пользователя стандартным поиском
 $searcher = [adsisearcher]"(samAccountName=$username)"
 $user = $searcher.FindOne()
 
 if ($user) {
-    # Получаем доступ к свойствам объекта AD
-    $adUser = $user.GetDirectoryEntry()
+    # В Constrained Language свойства извлекаются через коллекцию Properties
+    $uac = $user.Properties["useraccountcontrol"][0]
     
-    # 1. Проверяем статус "Отключена" через флаг UserAccountControl
-    # Флаг 2 (ADS_UF_ACCOUNTDISABLE) отвечает за отключение учетки
-    $uac = $adUser.Properties["userAccountControl"].Value
+    # Битовая маска: 2 — аккаунт отключен (ADS_UF_ACCOUNTDISABLE)
     if ($uac -band 2) {
         $status = "Отключена (Disabled)"
         $statusColor = "Red"
@@ -56,9 +55,10 @@ if ($user) {
         $statusColor = "Green"
     }
     
-    # 2. Проверяем статус "Заблокирована"
-    $isLocked = $adUser.IsAccountLocked
-    if ($isLocked) {
+    # Проверка блокировки (lockoutTime). Если там 0 — все ок. 
+    # Если там большое число (временная метка) — аккаунт заблокирован.
+    $lockoutTime = $user.Properties["lockouttime"][0]
+    if ($lockoutTime -gt 0) {
         $lockStatus = "ЗАБЛОКИРОВАНА (Locked Out)"
         $lockColor = "Red"
     } else {
@@ -66,11 +66,15 @@ if ($user) {
         $lockColor = "Green"
     }
     
-    # Вывод красивого результата в консоль
-    Write-Host "`n=== Результат проверки (ADSI) для: $username ===" -ForegroundColor Cyan
+    # Вывод результата
+    Write-Host "`n=== Результат проверки (Safe ADSI) для: $username ===" -ForegroundColor Cyan
     Write-Host "Состояние учетной записи: " -NoNewline; Write-Host $status -ForegroundColor $statusColor
     Write-Host "Статус блокировки:        " -NoNewline; Write-Host $lockStatus -ForegroundColor $lockColor
     Write-Host "=================================================`n"
+
+} else {
+    Write-Host "`nОшибка: Пользователь '$username' не найден в домене.`n" -ForegroundColor Yellow
+}
 
 } else {
     Write-Host "`nОшибка: Пользователь '$username' не найден в домене.`n" -ForegroundColor Yellow
