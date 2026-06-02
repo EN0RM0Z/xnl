@@ -1,0 +1,55 @@
+Get-ADUser -Identity "Имя_Пользователя" -Properties Enabled, LockedOut | Select-Object Name, Enabled, LockedOut
+
+Import-Module ActiveDirectory
+
+$username = Read-Host "Введите SAMAccountName пользователя"
+
+try {
+    # Получаем данные пользователя
+    $user = Get-ADUser -Identity $username -Properties Enabled, LockedOut, AccountLockoutTime
+    
+    # Проверяем статус "Отключена"
+    if ($user.Enabled -eq $false) {
+        $status = "Отключена (Disabled)"
+    } else {
+        $status = "Активна (Enabled)"
+    }
+    
+    # Проверяем статус "Заблокирована"
+    if ($user.LockedOut -eq $true) {
+        $lockStatus = "ЗАБЛОКИРОВАНА (Locked Out) в cистеме. Время блокировки: $($user.AccountLockoutTime)"
+    } else {
+        $lockStatus = "Не заблокирована"
+    }
+    
+    # Вывод результата
+    Write-Host "`n=== Результат проверки для пользователя: $username ===" -ForegroundColor Cyan
+    Write-Host "Состояние учетной записи: " -NoNewline; Write-Host $status -ForegroundColor ($user.Enabled ? "Green" : "Red")
+    Write-Host "Статус блокировки:        " -NoNewline; Write-Host $lockStatus -ForegroundColor ($user.LockedOut ? "Red" : "Green")
+    Write-Host "=================================================`n"
+}
+catch {
+    Write-Host "Ошибка: Пользователь '$username' не найден в Active Directory." -ForegroundColor Yellow
+}
+
+$username = "Имя_Пользователя"
+$searcher = [adsisearcher]"(samAccountName=$username)"
+$user = $searcher.FindOne()
+
+if ($user) {
+    $adUser = $user.GetDirectoryEntry()
+    
+    # Проверка на отключение (UserAccountControl: 2 = ADS_UF_ACCOUNTDISABLE)
+    $uac = $adUser.Properties["userAccountControl"].Value
+    $isDisabled = [bool]($uac -band 2)
+    
+    # Проверка на блокировку
+    $isLocked = $adUser.IsAccountLocked
+    
+    Write-Host "Пользователь: $username"
+    Write-Host "Отключен: $isDisabled"
+    Write-Host "Заблокирован: $isLocked"
+} else {
+    Write-Host "Пользователь не найден"
+}
+
