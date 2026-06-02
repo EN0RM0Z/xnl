@@ -8,48 +8,71 @@ try {
     # Получаем данные пользователя
     $user = Get-ADUser -Identity $username -Properties Enabled, LockedOut, AccountLockoutTime
     
-    # Проверяем статус "Отключена"
-    if ($user.Enabled -eq $false) {
-        $status = "Отключена (Disabled)"
-    } else {
+    # Определяем цвета и текст через классический if/else
+    if ($user.Enabled -eq $true) {
         $status = "Активна (Enabled)"
+        $statusColor = "Green"
+    } else {
+        $status = "Отключена (Disabled)"
+        $statusColor = "Red"
     }
     
-    # Проверяем статус "Заблокирована"
     if ($user.LockedOut -eq $true) {
         $lockStatus = "ЗАБЛОКИРОВАНА (Locked Out) в cистеме. Время блокировки: $($user.AccountLockoutTime)"
+        $lockColor = "Red"
     } else {
         $lockStatus = "Не заблокирована"
+        $lockColor = "Green"
     }
     
     # Вывод результата
     Write-Host "`n=== Результат проверки для пользователя: $username ===" -ForegroundColor Cyan
-    Write-Host "Состояние учетной записи: " -NoNewline; Write-Host $status -ForegroundColor ($user.Enabled ? "Green" : "Red")
-    Write-Host "Статус блокировки:        " -NoNewline; Write-Host $lockStatus -ForegroundColor ($user.LockedOut ? "Red" : "Green")
+    Write-Host "Состояние учетной записи: " -NoNewline; Write-Host $status -ForegroundColor $statusColor
+    Write-Host "Статус блокировки:        " -NoNewline; Write-Host $lockStatus -ForegroundColor $lockColor
     Write-Host "=================================================`n"
 }
 catch {
     Write-Host "Ошибка: Пользователь '$username' не найден в Active Directory." -ForegroundColor Yellow
 }
 
-$username = "Имя_Пользователя"
+$username = Read-Host "Введите SAMAccountName пользователя"
+
+# Ищем пользователя в Active Directory через базовый поиск .NET
 $searcher = [adsisearcher]"(samAccountName=$username)"
 $user = $searcher.FindOne()
 
 if ($user) {
+    # Получаем доступ к свойствам объекта AD
     $adUser = $user.GetDirectoryEntry()
     
-    # Проверка на отключение (UserAccountControl: 2 = ADS_UF_ACCOUNTDISABLE)
+    # 1. Проверяем статус "Отключена" через флаг UserAccountControl
+    # Флаг 2 (ADS_UF_ACCOUNTDISABLE) отвечает за отключение учетки
     $uac = $adUser.Properties["userAccountControl"].Value
-    $isDisabled = [bool]($uac -band 2)
+    if ($uac -band 2) {
+        $status = "Отключена (Disabled)"
+        $statusColor = "Red"
+    } else {
+        $status = "Активна (Enabled)"
+        $statusColor = "Green"
+    }
     
-    # Проверка на блокировку
+    # 2. Проверяем статус "Заблокирована"
     $isLocked = $adUser.IsAccountLocked
+    if ($isLocked) {
+        $lockStatus = "ЗАБЛОКИРОВАНА (Locked Out)"
+        $lockColor = "Red"
+    } else {
+        $lockStatus = "Не заблокирована"
+        $lockColor = "Green"
+    }
     
-    Write-Host "Пользователь: $username"
-    Write-Host "Отключен: $isDisabled"
-    Write-Host "Заблокирован: $isLocked"
+    # Вывод красивого результата в консоль
+    Write-Host "`n=== Результат проверки (ADSI) для: $username ===" -ForegroundColor Cyan
+    Write-Host "Состояние учетной записи: " -NoNewline; Write-Host $status -ForegroundColor $statusColor
+    Write-Host "Статус блокировки:        " -NoNewline; Write-Host $lockStatus -ForegroundColor $lockColor
+    Write-Host "=================================================`n"
+
 } else {
-    Write-Host "Пользователь не найден"
+    Write-Host "`nОшибка: Пользователь '$username' не найден в домене.`n" -ForegroundColor Yellow
 }
 
