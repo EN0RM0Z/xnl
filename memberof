@@ -3,3 +3,5 @@ Get-ADUser -Filter 'Enabled -eq $true' | ForEach-Object { $c = (Get-ADUser $_.Sa
 Get-ADUser -Filter 'Enabled -eq $true' | ForEach-Object { $dn = [ADSI]"LDAP://$($_.DistinguishedName)"; $dn.RefreshCache(@("tokenGroups")); $c = $dn.Properties["tokenGroups"].Count; if ($c -gt 80) { [PSCustomObject]@{ Login=$_.SamAccountName; Groups=$c } } } | Sort-Object Groups -Descending | Format-Table -AutoSize
 
 Get-ADUser -Filter 'Enabled -eq $true' | Select-Object SamAccountName, @{Name="Groups"; Expression={ $dn = [ADSI]"LDAP://$($_.DistinguishedName)"; $dn.RefreshCache(@("tokenGroups")); $dn.Properties["tokenGroups"].Count }} | Where-Object { $_.Groups -gt 100 } | Sort-Object Groups -Descending | Format-Table -AutoSize
+
+Get-ADUser -Filter 'Enabled -eq $true' | Select-Object SamAccountName, @{Name="TokenSizeBytes"; Expression={ $dn = [ADSI]"LDAP://$($_.DistinguishedName)"; $dn.RefreshCache(@("tokenGroups")); $size = 0; $dn.Properties["tokenGroups"] | ForEach-Object { $size += $_.Length }; $size }} | Where-Object { $_.TokenSizeBytes -gt 3200 } | Sort-Object TokenSizeBytes -Descending | Format-Table -AutoSize
