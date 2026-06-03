@@ -1,1 +1,3 @@
 Get-ADUser -Filter 'Enabled -eq $true' | ForEach-Object { $c = (Get-ADUser $_.SamAccountName -Properties TokenGroups).TokenGroups.Count; if ($c -gt 80) { [PSCustomObject]@{ Login=$_.SamAccountName; Groups=$c } } } | Sort-Object Groups -Descending | Format-Table -AutoSize
+
+Get-ADUser -Filter 'Enabled -eq $true' | ForEach-Object { $dn = [ADSI]"LDAP://$($_.DistinguishedName)"; $dn.RefreshCache(@("tokenGroups")); $c = $dn.Properties["tokenGroups"].Count; if ($c -gt 80) { [PSCustomObject]@{ Login=$_.SamAccountName; Groups=$c } } } | Sort-Object Groups -Descending | Format-Table -AutoSize
