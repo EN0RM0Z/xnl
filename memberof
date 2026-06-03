@@ -5,3 +5,10 @@ Get-ADUser -Filter 'Enabled -eq $true' | ForEach-Object { $dn = [ADSI]"LDAP://$(
 Get-ADUser -Filter 'Enabled -eq $true' | Select-Object SamAccountName, @{Name="Groups"; Expression={ $dn = [ADSI]"LDAP://$($_.DistinguishedName)"; $dn.RefreshCache(@("tokenGroups")); $dn.Properties["tokenGroups"].Count }} | Where-Object { $_.Groups -gt 100 } | Sort-Object Groups -Descending | Format-Table -AutoSize
 
 Get-ADUser -Filter 'Enabled -eq $true' | Select-Object SamAccountName, @{Name="TokenSizeBytes"; Expression={ $dn = [ADSI]"LDAP://$($_.DistinguishedName)"; $dn.RefreshCache(@("tokenGroups")); $size = 0; $dn.Properties["tokenGroups"] | ForEach-Object { $size += $_.Length }; $size }} | Where-Object { $_.TokenSizeBytes -gt 3200 } | Sort-Object TokenSizeBytes -Descending | Format-Table -AutoSize
+
+Шаг 1. Тест обычного («легкого») заголовка (4 КБ)
+powershell -Command "$p = 'X:' + ('A' * 4000); curl -v -H $p https://your-keycloak-domain.com"
+Шаг 2. Тест пограничного заголовка (9 КБ)
+powershell -Command "$p = 'X:' + ('A' * 9000); curl -v -H $p https://your-keycloak-domain.com"
+Шаг 3. Тест «тяжелого» заголовка (15 КБ)
+powershell -Command "$p = 'X:' + ('A' * 15000); curl -v -H $p https://your-keycloak-domain.com"
