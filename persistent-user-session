@@ -1,0 +1,2 @@
+spi-persistent-user-session-infinispan-batch-delay=5000
+spi-persistent-user-session-infinispan-max-batch-size=30
