@@ -1,0 +1,21 @@
+SELECT
+    table_schema AS database_name,
+    ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS size_mb
+FROM information_schema.tables
+GROUP BY table_schema
+ORDER BY size_mb DESC;
+
+SELECT
+    table_schema AS database_name,
+    ROUND(SUM(data_length + index_length) / 1024 / 1024 / 1024, 2) AS size_gb
+FROM information_schema.tables
+GROUP BY table_schema
+ORDER BY size_gb DESC;
+
+Количество таблиц в каждой базе
+SELECT
+    table_schema,
+    COUNT(*) AS tables_count
+FROM information_schema.tables
+GROUP BY table_schema
+ORDER BY tables_count DESC;
