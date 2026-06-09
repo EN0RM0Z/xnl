@@ -1,0 +1,10 @@
+# важно для pipe tar|gzip
+set -o pipefail
+
+log_msg "[INFO] Создание архива $BACKUP_FILE"
+
+if ! tar -cf - -C "$DUMP_DIR" . | gzip -${COMPRESSION_LEVEL} > "$BACKUP_PATH"; then
+    add_error "Ошибка создания архива"
+    rm -rf "$DUMP_DIR"
+    finish_script
+fi
