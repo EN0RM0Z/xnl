@@ -19,3 +19,19 @@ SELECT
 FROM information_schema.tables
 GROUP BY table_schema
 ORDER BY tables_count DESC;
+
+
+Проверить существующих пользователей можно так:
+
+SELECT User, Host
+FROM mysql.user
+ORDER BY User, Host;
+
+
+CREATE USER 'backup_user'@'localhost'
+IDENTIFIED BY 'СложныйПароль';
+
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON *.* TO 'backup_user'@'localhost';
+GRANT SELECT ON mysql.proc TO 'backup_user'@'localhost';
+
+
