@@ -1,0 +1,159 @@
+' Использование: cscript //nologo log_shipper.vbs "[Путь_к_логу]" "[URL_Webhook_n8n]" [Размер_Батча] [Таймаут_МС]
+' Пример: cscript //nologo log_shipper.vbs "C:\keycloak\logs\server.log" "http://localhost:5678/webhook-test/log-ingest" 50 2000
+
+Dim objFSO, objLogFile, objPtrFile
+Dim strLogPath, strWebhookUrl, intBatchSize, intSleepTime
+Dim intLastLine, intCurrentLine, strLine, strBatchJson, intLinesInBatch
+
+WScript.Echo "=================================================="
+WScript.Echo "       ЗАПУСК ИНКРЕМЕНТАЛЬНОГО ЛОГ-ШИППЕРА        "
+WScript.Echo "=================================================="
+
+If WScript.Arguments.Count < 4 Then
+    WScript.Echo "ОШИБКА: Недостаточно аргументов!"
+    WScript.Echo "Синтаксис: cscript //nologo log_shipper.vbs [ПутьКЛогу] [WebhookURL] [РазмерБатча] [ПаузаМС]"
+    WScript.Quit
+End If
+
+strLogPath = WScript.Arguments(0)
+strWebhookUrl = WScript.Arguments(1)
+intBatchSize = CInt(WScript.Arguments(2))
+intSleepTime = CInt(WScript.Arguments(3))
+
+WScript.Echo "[ИНФО] Целевой файл: " & strLogPath
+WScript.Echo "[ИНФО] URL вебхука n8n: " & strWebhookUrl
+WScript.Echo "[ИНФО] Размер порции (батч): " & intBatchSize & " строк"
+
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+
+If Not objFSO.FileExists(strLogPath) Then
+    WScript.Echo "КРИТИЧЕСКАЯ ОШИБКА: Файл лога не найден!"
+    WScript.Quit
+End If
+
+Dim strPtrPath
+strPtrPath = strLogPath & ".ptr"
+
+intLastLine = 0
+If objFSO.FileExists(strPtrPath) Then
+    Set objPtrFile = objFSO.OpenTextFile(strPtrPath, 1)
+    If Not objPtrFile.AtEndOfStream Then
+        Dim ptrValue
+        ptrValue = objPtrFile.ReadLine
+        If IsNumeric(ptrValue) Then intLastLine = CLng(ptrValue)
+    End If
+    objPtrFile.Close
+    WScript.Echo "[ЧЕКПОИНТ] Начинаем со строки: " & intLastLine
+Else
+    WScript.Echo "[ЧЕКПОИНТ] Читаем лог с самого начала (строка 0)."
+End If
+
+Set objLogFile = objFSO.OpenTextFile(strLogPath, 1)
+intCurrentLine = 0
+
+' Пропуск старых строк
+If intLastLine > 0 Then
+    Do While intCurrentLine < intLastLine And Not objLogFile.AtEndOfStream
+        objLogFile.SkipLine
+        intCurrentLine = intCurrentLine + 1
+    Loop
+    WScript.Echo "[ПРОЦЕСС] Пропущено строк: " & intCurrentLine
+End If
+
+If objLogFile.AtEndOfStream Then
+    WScript.Echo "[ЗАВЕРШЕНО] Новых строк нет. Выхожу."
+    objLogFile.Close
+    WScript.Quit
+End If
+
+strBatchJson = "["
+intLinesInBatch = 0
+WScript.Echo "[ПРОЦЕСС] Чтение новых строк..."
+
+Do While Not objLogFile.AtEndOfStream
+    strLine = objLogFile.ReadLine
+    intCurrentLine = intCurrentLine + 1
+    
+    ' СТРОГОЕ ЭКРАНИРОВАНИЕ ДЛЯ JSON
+    strLine = Replace(strLine, "\", "\\")        ' Бэкслеши
+    strLine = Replace(strLine, """", "\""")      ' Кавычки
+    strLine = Replace(strLine, Chr(9), "\t")     ' СИМВОЛ ТАБУЛЯЦИИ (Исправление ошибки 422)
+    strLine = Replace(strLine, Chr(8), "\b")     ' Backspace
+    strLine = Replace(strLine, Chr(12), "\f")    ' Formfeed
+    strLine = Replace(strLine, vbCr, "")         ' Символы возврата каретки
+    strLine = Replace(strLine, vbLf, "")         ' Переносы строк
+    
+    ' Удаление любых других нетипичных управляющих символов ASCII (0-31), если они остались
+    Dim i
+    For i = 0 To 31
+        If i <> 9 And i <> 8 And i <> 12 Then ' Исключаем то, что уже обработали выше
+            strLine = Replace(strLine, Chr(i), "")
+        End If
+    Next
+    
+    If intLinesInBatch > 0 Then
+        strBatchJson = strBatchJson & ","
+    End If
+    
+    strBatchJson = strBatchJson & "{""message"":""" & strLine & """}"
+    intLinesInBatch = intLinesInBatch + 1
+    
+    If intLinesInBatch >= intBatchSize Then
+        strBatchJson = strBatchJson & "]"
+        WScript.Echo "[СЕТЬ] Отправка батча из " & intLinesInBatch & " строк..."
+        
+        SendBatch strWebhookUrl, strBatchJson
+        
+        WScript.Echo "[ПАУЗА] Ожидание " & intSleepTime & " мс..."
+        WScript.Sleep intSleepTime
+        
+        strBatchJson = "["
+        intLinesInBatch = 0
+        SaveState strPtrPath, intCurrentLine
+    End If
+Loop
+
+' Отправка остатка
+If intLinesInBatch > 0 Then
+    strBatchJson = strBatchJson & "]"
+    WScript.Echo "[СЕТЬ] Отправка финального остатка (" & intLinesInBatch & " строк)..."
+    SendBatch strWebhookUrl, strBatchJson
+    SaveState strPtrPath, intCurrentLine
+End If
+
+objLogFile.Close
+WScript.Echo "=================================================="
+WScript.Echo "[УСПЕХ] Скрипт отработал. Текущая позиция: " & intCurrentLine
+WScript.Echo "=================================================="
+
+Sub SendBatch(url, json)
+    Dim xmlHttp
+    On Error Resume Next
+    Set xmlHttp = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    
+    xmlHttp.Open "POST", url, False
+    xmlHttp.setRequestHeader "Content-Type", "application/json; charset=utf-8"
+    
+    xmlHttp.Send json
+    
+    If Err.Number <> 0 Then
+        WScript.Echo "[ОШИБКА СЕТИ] Описание: " & Err.Description
+        Err.Clear
+    Else
+        WScript.Echo "[ОТВЕТ n8n] HTTP Статус: " & xmlHttp.Status & " " & xmlHttp.statusText
+        WScript.Echo "[ОТВЕТ n8n] Текст: " & xmlHttp.responseText
+    End If
+    On Error GoTo 0
+End Sub
+
+Sub SaveState(path, lineNum)
+    Dim file
+    On Error Resume Next
+    Set file = objFSO.CreateTextFile(path, True)
+    If Err.Number = 0 Then
+        file.WriteLine lineNum
+        file.Close
+        WScript.Echo "[СИСТЕМА] Чекпоинт сохранен: строка " & lineNum
+    End If
+    On Error GoTo 0
+End Sub
