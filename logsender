@@ -1,0 +1,177 @@
+using System;
+using System.IO;
+using System.Text;
+using System.Net.Mail;
+using System.Collections.Generic;
+
+namespace SmtpFileProcessor
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            // 1. Проверка аргументов командной строки
+            if (args.Length < 1)
+            {
+                Console.WriteLine("Ошибка: Не указан путь к файлу конфигурации INI.");
+                Console.WriteLine("Использование: program.exe <путь_к_ini_файлу>");
+                return;
+            }
+
+            string iniPath = args[0];
+            if (!File.Exists(iniPath))
+            {
+                Console.WriteLine("Ошибка: Файл конфигурации не найден по пути: " + iniPath);
+                return;
+            }
+
+            try
+            {
+                // 2. Чтение и парсинг INI файла
+                Dictionary<string, string> config = ParseIniFile(iniPath);
+
+                string smtpServer = GetConfigValue(config, "SmtpServer");
+                string fromAddress = GetConfigValue(config, "From");
+                string toAddresses = GetConfigValue(config, "To");
+                string textFilePath = GetConfigValue(config, "TextFilePath");
+                string sentDirectory = GetConfigValue(config, "SentDirectory");
+
+                // 3. Проверка существования целевого текстового файла
+                if (!File.Exists(textFilePath))
+                {
+                    Console.WriteLine("Ошибка: Обрабатываемый текстовый файл не найден: " + textFilePath);
+                    return;
+                }
+
+                // 4. Чтение и обработка содержимого текстового файла (UTF-8)
+                string[] lines = File.ReadAllLines(textFilePath, Encoding.UTF8);
+
+                if (lines.Length == 0)
+                {
+                    Console.WriteLine("Ошибка: Файл " + textFilePath + " пуст. Нечего отправлять.");
+                    return;
+                }
+
+                string subject = lines[lines.Length - 1]; // Последняя строка — тема
+                
+                // Собираем тело письма (все строки, кроме последней)
+                StringBuilder bodyBuilder = new StringBuilder();
+                for (int i = 0; i < lines.Length - 1; i++)
+                {
+                    bodyBuilder.AppendLine(lines[i]);
+                }
+                string body = bodyBuilder.ToString();
+
+                // 5. Отправка почты (без авторизации)
+                Console.WriteLine("Отправка сообщения через " + smtpServer + "...");
+                
+                using (MailMessage message = new MailMessage())
+                {
+                    message.From = new MailAddress(fromAddress);
+                    
+                    // Поддержка нескольких получателей через запятую или точку с запятой
+                    string[] recipients = toAddresses.Split(new char[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (string recipient in recipients)
+                    {
+                        message.To.Add(new MailAddress(recipient.Trim()));
+                    }
+
+                    message.Subject = subject;
+                    message.Body = body;
+                    message.SubjectEncoding = Encoding.UTF8;
+                    message.BodyEncoding = Encoding.UTF8;
+
+                    using (SmtpClient smtpClient = new SmtpClient(smtpServer))
+                    {
+                        // Настройки для отправки без авторизации
+                        smtpClient.UseDefaultCredentials = false; 
+                        smtpClient.Send(message);
+                    }
+                }
+
+                Console.WriteLine("Письмо успешно отправлено.");
+
+                // 6. Перенос файла в папку отправленных
+                if (!Directory.Exists(sentDirectory))
+                {
+                    Directory.CreateDirectory(sentDirectory);
+                }
+
+                string fileName = Path.GetFileName(textFilePath);
+                string destinationPath = Path.Combine(sentDirectory, fileName);
+
+                // Если в целевой папке уже есть файл с таким именем, удаляем его перед переносом
+                if (File.Exists(destinationPath))
+                {
+                    File.Delete(destinationPath);
+                }
+
+                File.Move(textFilePath, destinationPath);
+                Console.WriteLine("Файл успешно перемещен в: " + destinationPath);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Произошла ошибка при выполнении программы:");
+                Console.WriteLine(ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Простейший парсер INI файла (игнорирует секции, читает пары ключ=значение)
+        /// </summary>
+        static Dictionary<string, string> ParseIniFile(string path)
+        {
+            Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string[] lines = File.ReadAllLines(path, Encoding.Default);
+
+            foreach (string line in lines)
+            {
+                string trimmed = line.Trim();
+                
+                // Пропускаем пустые строки, комментарии и названия секций [Section]
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith(";") || trimmed.StartsWith("#") || (trimmed.StartsWith("[") && trimmed.EndsWith Black(trimmed)))
+                    continue;
+
+                int separatorIndex = trimmed.IndexOf('=');
+                if (separatorIndex > 0)
+                {
+                    string key = trimmed.Substring(0, separatorIndex).Trim();
+                    string value = trimmed.Substring(separatorIndex + 1).Trim();
+                    
+                    if (!result.ContainsKey(key))
+                    {
+                        result.Add(key, value);
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Вспомогательный метод для безопасного извлечения параметров
+        /// </summary>
+        static string GetConfigValue(Dictionary<string, string> config, string key)
+        {
+            if (!config.ContainsKey(key) || string.IsNullOrEmpty(config[key]))
+            {
+                throw new Exception("В INI файле отсутствует или не заполнен обязательный параметр: " + key);
+            }
+            return config[key];
+        }
+
+        // Вспомогательный метод для проверки секций
+        static bool Black(string text)
+        {
+             return text.StartsWith("[") && text.EndsWith("]");
+        }
+    }
+}
+
+==================
+
+[Settings]
+SmtpServer=192.168.1.50
+From=alerts@company.local
+To=admin@company.local, manager@company.local
+TextFilePath=C:\App\data\message.txt
+SentDirectory=C:\App\sent\
