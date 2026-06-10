@@ -1,0 +1,59 @@
+for DB_NAME in "${DB_NAMES[@]}"; do
+
+    BACKUP_FILE="${DB_NAME}_${TIMESTAMP}.sql.gz"
+    BACKUP_PATH="${LOCAL_BACKUP_DIR}/${BACKUP_FILE}"
+
+    log_msg "[INFO] Создание дампа базы $DB_NAME"
+
+    if ! mysqldump \
+            --defaults-extra-file="$MYSQL_CNF" \
+            --single-transaction \
+            --quick \
+            --routines \
+            --triggers \
+            --events \
+            "$DB_NAME" | gzip -${COMPRESSION_LEVEL} > "$BACKUP_PATH"; then
+
+        add_error "Ошибка создания дампа базы $DB_NAME"
+
+        rm -f "$BACKUP_PATH"
+
+        continue
+    fi
+
+    if ! gzip -t "$BACKUP_PATH"; then
+
+        add_error "Поврежден архив базы $DB_NAME"
+
+        rm -f "$BACKUP_PATH"
+
+        continue
+    fi
+
+    BACKUP_SIZE=$(stat -c%s "$BACKUP_PATH")
+
+    if [ "$BACKUP_SIZE" -lt "$MIN_DUMP_SIZE" ]; then
+
+        add_error "Размер архива базы $DB_NAME слишком мал: $BACKUP_SIZE байт"
+
+        rm -f "$BACKUP_PATH"
+
+        continue
+    fi
+
+    SUCCESS_DUMPS+=("$DB_NAME")
+
+    log_msg "[INFO] База $DB_NAME успешно сохранена"
+
+done
+===================
+for DB_NAME in "${SUCCESS_DUMPS[@]}"; do
+
+    BACKUP_FILE="${DB_NAME}_${TIMESTAMP}.sql.gz"
+
+    rsync -avz -e ssh \
+        "${LOCAL_BACKUP_DIR}/${BACKUP_FILE}" \
+        "$REMOTE_USER@$REMOTE_HOST:$REMOTE_BACKUP_DIR/" || \
+        add_error "Ошибка копирования $BACKUP_FILE"
+
+done
