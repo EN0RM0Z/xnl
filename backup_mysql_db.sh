@@ -1,54 +1,49 @@
 #!/bin/bash
-# Скрипт резервного копирования MariaDB
-# Каждая база сохраняется в отдельный дамп, затем все дампы архивируются
 
-### КОНФИГУРИРУЕМЫЕ ПАРАМЕТРЫ ###
-DB_NAMES=("db1" "db2" "db3")             # Массив баз данных для бэкапа
-#DB_USER="backup_user"                    # Пользователь БД для бэкапов
-#DB_HOST="localhost"                      # Хост БД
+set -o pipefail
 
-LOCAL_BACKUP_DIR="/var/backups/db_dumps" # Локальная директория для бэкапов
+# =========================
+# КОНФИГУРАЦИЯ
+# =========================
 
-REMOTE_BACKUP_DIR="/mnt/backup_storage/db" # Удаленная директория
-REMOTE_USER="backupuser"                 # Пользователь для SSH-доступа
-REMOTE_HOST="server02"                   # Хост сервера-приемника
+DB_NAMES=("db1" "db2" "db3")
 
-RETENTION_DAYS=30                        # Дней хранения бэкапов
-COMPRESSION_LEVEL=6                      # Уровень сжатия (1-9)
+DB_USER="backup_user"
+DB_HOST="localhost"
 
-#COPY_METHOD="RSYNC"                      # Метод копирования: RSYNC
-COPY_METHOD="SCP"                        # Метод копирования: SCP
+LOCAL_BACKUP_DIR="/var/backups/db_dumps"
 
-MIN_DUMP_SIZE=10240                      # Минимальный размер дампа (10 КБ)
+REMOTE_BACKUP_DIR="/mnt/backup_storage/db"
+REMOTE_USER="backupuser"
+REMOTE_HOST="server02"
 
-MYSQL_CNF="/home/backupuser/.my.cnf"     # Файл с учетными данными
+RETENTION_DAYS=30
+COMPRESSION_LEVEL=6
 
-BACKUP_PREFIX="db"            # Префикс файла бэкапа
+COPY_METHOD="RSYNC"
 
-# Параметры почты
-MAIL_TO="admin@example.com"
-MAIL_FROM="backup@server01"
-MAIL_SUBJECT="MySQL backup report"
+MIN_DUMP_SIZE=10240
 
-### КОНЕЦ КОНФИГУРИРУЕМЫХ ПАРАМЕТРОВ ###
+MYSQL_CNF="/home/backupuser/.my.cnf"
 
-# Генерация временной метки
-TIMESTAMP=$(date +%Y%m%d)
+BACKUP_PREFIX="mysql"
 
 LOG_FILE="/var/log/mysql_backup.log"
 
-DUMP_DIR="${LOCAL_BACKUP_DIR}/tmp_${BACKUP_PREFIX}_${TIMESTAMP}"
-BACKUP_FILE="${BACKUP_PREFIX}_${TIMESTAMP}.tar.gz"
-BACKUP_PATH="${LOCAL_BACKUP_DIR}/${BACKUP_FILE}"
+TIMESTAMP=$(date +%Y%m%d)
 
-# Статус выполнения
+# =========================
+# СТАТУС
+# =========================
+
 HAS_ERROR=0
 ERRORS=()
 SUCCESS_DUMPS=()
+SUCCESS_COPIED=()
 
-###########################################################################
+# =========================
 # ФУНКЦИИ
-###########################################################################
+# =========================
 
 log_msg() {
     echo "$1" | tee -a "$LOG_FILE"
@@ -60,57 +55,17 @@ add_error() {
     log_msg "[ERROR] $1"
 }
 
-send_report() {
-
-    local SUBJECT_PREFIX="[INFO]"
-
-    if [ "$HAS_ERROR" -ne 0 ]; then
-        SUBJECT_PREFIX="[ERROR]"
+write_final_status() {
+    if [ "$HAS_ERROR" -eq 0 ]; then
+        log_msg "[INFO] MySQL backup report"
+    else
+        log_msg "[ERROR] MySQL backup report"
     fi
-
-    {
-        echo "Отчет резервного копирования MariaDB"
-        echo
-        echo "Дата: $(date)"
-        echo "Хост: $(hostname)"
-        echo
-
-        echo "Успешно сохраненные базы:"
-        if [ ${#SUCCESS_DUMPS[@]} -eq 0 ]; then
-            echo "  Нет"
-        else
-            for DB in "${SUCCESS_DUMPS[@]}"; do
-                echo "  - $DB"
-            done
-        fi
-
-        echo
-
-        echo "Ошибки:"
-        if [ ${#ERRORS[@]} -eq 0 ]; then
-            echo "  Нет"
-        else
-            for ERR in "${ERRORS[@]}"; do
-                echo "  - $ERR"
-            done
-        fi
-
-        echo
-        echo "Последние строки журнала:"
-        echo "----------------------------------------"
-        tail -50 "$LOG_FILE"
-        echo "----------------------------------------"
-
-    } | mail -r "$MAIL_FROM" \
-             -s "${SUBJECT_PREFIX} ${MAIL_SUBJECT}" \
-             "$MAIL_TO"
 }
 
 finish_script() {
-
     log_msg "===== [$(date)] Процесс завершен ====="
-
-    send_report
+    write_final_status
 
     if [ "$HAS_ERROR" -eq 0 ]; then
         exit 0
@@ -119,233 +74,149 @@ finish_script() {
     fi
 }
 
-###########################################################################
-# НАЧАЛО РАБОТЫ
-###########################################################################
+# =========================
+# НАЧАЛО
+# =========================
 
 log_msg "===== [$(date)] Начало резервного копирования ====="
 log_msg "[INFO] Базы для бэкапа: ${DB_NAMES[*]}"
 
-# Проверка существования директории
 if [ ! -d "$LOCAL_BACKUP_DIR" ]; then
     add_error "Директория $LOCAL_BACKUP_DIR не существует"
     finish_script
 fi
 
-# Проверка прав записи
 if [ ! -w "$LOCAL_BACKUP_DIR" ]; then
     add_error "Нет прав на запись в $LOCAL_BACKUP_DIR"
     finish_script
 fi
 
-# Проверка файла конфигурации
 if [ ! -f "$MYSQL_CNF" ]; then
     add_error "Файл конфигурации MySQL не найден: $MYSQL_CNF"
     finish_script
 fi
 
-# Проверка зависимостей
-for cmd in mysqldump gzip ssh tar stat; do
+for cmd in mysqldump gzip rsync scp stat find; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
-        add_error "Отсутствует необходимая команда: $cmd"
+        add_error "Отсутствует команда: $cmd"
         finish_script
     fi
 done
 
-# Проверка mail
-if ! command -v mail >/dev/null 2>&1; then
-    echo "[WARNING] Команда mail не найдена. Отправка отчета невозможна." | tee -a "$LOG_FILE"
-fi
-
-# Проверка свободного места (минимум 1 ГБ)
 MIN_SPACE_KB=$((1024 * 1024))
 AVAILABLE_SPACE=$(df -k --output=avail "$LOCAL_BACKUP_DIR" | awk 'NR==2 {print $1}')
 
 if [ "$AVAILABLE_SPACE" -lt "$MIN_SPACE_KB" ]; then
-    add_error "Недостаточно места! Доступно: $((AVAILABLE_SPACE/1024)) MB, требуется: $((MIN_SPACE_KB/1024)) MB"
+    add_error "Недостаточно места на диске"
     finish_script
 fi
 
-# Очистка старых временных файлов за сегодня
-rm -rf "$DUMP_DIR" 2>/dev/null
-rm -f "$BACKUP_PATH" 2>/dev/null
+rm -f "${LOCAL_BACKUP_DIR}/${BACKUP_PREFIX}_*.sql.gz" 2>/dev/null
 
-mkdir -p "$DUMP_DIR"
+# =========================
+# ДАМПЫ
+# =========================
 
-###########################################################################
-# СОЗДАНИЕ ДАМПОВ
-###########################################################################
-
-log_msg "[INFO] Создание дампов баз данных..."
+log_msg "[INFO] Создание дампов"
 
 for DB_NAME in "${DB_NAMES[@]}"; do
 
-    DUMP_FILE="${DB_NAME}_${TIMESTAMP}.sql"
-    DUMP_PATH="${DUMP_DIR}/${DUMP_FILE}"
+    BACKUP_FILE="${BACKUP_PREFIX}_${DB_NAME}_${TIMESTAMP}.sql.gz"
+    BACKUP_PATH="${LOCAL_BACKUP_DIR}/${BACKUP_FILE}"
 
-    log_msg "[INFO] Создание дампа базы $DB_NAME"
+    log_msg "[INFO] Дамп базы $DB_NAME"
 
     if ! mysqldump \
-            --defaults-extra-file="$MYSQL_CNF" \
-            --single-transaction \
-            --quick \
-            --routines \
-            --triggers \
-            --events \
-            "$DB_NAME" > "$DUMP_PATH"; then
+        --defaults-extra-file="$MYSQL_CNF" \
+        --single-transaction \
+        --quick \
+        --routines \
+        --triggers \
+        --events \
+        "$DB_NAME" | gzip -"$COMPRESSION_LEVEL" > "$BACKUP_PATH"; then
 
-        add_error "Ошибка создания дампа базы $DB_NAME"
-
-        rm -f "$DUMP_PATH" 2>/dev/null
-
+        add_error "Ошибка дампа $DB_NAME"
+        rm -f "$BACKUP_PATH"
         continue
     fi
 
-    DUMP_SIZE=$(stat -c%s "$DUMP_PATH")
+    if ! gzip -t "$BACKUP_PATH"; then
+        add_error "Поврежден архив $DB_NAME"
+        rm -f "$BACKUP_PATH"
+        continue
+    fi
 
-    if [ "$DUMP_SIZE" -lt "$MIN_DUMP_SIZE" ]; then
+    SIZE=$(stat -c%s "$BACKUP_PATH")
 
-        add_error "Размер дампа базы $DB_NAME слишком мал: $DUMP_SIZE байт"
-
-        rm -f "$DUMP_PATH"
-
+    if [ "$SIZE" -lt "$MIN_DUMP_SIZE" ]; then
+        add_error "Слишком маленький дамп $DB_NAME"
+        rm -f "$BACKUP_PATH"
         continue
     fi
 
     SUCCESS_DUMPS+=("$DB_NAME")
-
-    log_msg "[INFO] База $DB_NAME успешно сохранена ($DUMP_SIZE байт)"
+    log_msg "[INFO] $DB_NAME успешно сохранена ($SIZE байт)"
 
 done
 
-###########################################################################
-# ПРОВЕРКА РЕЗУЛЬТАТА
-###########################################################################
-
 if [ ${#SUCCESS_DUMPS[@]} -eq 0 ]; then
-    add_error "Не удалось создать ни одного корректного дампа"
-
-    rm -rf "$DUMP_DIR"
-
+    add_error "Не создано ни одного дампа"
     finish_script
 fi
 
-###########################################################################
-# АРХИВИРОВАНИЕ
-###########################################################################
+# =========================
+# КОПИРОВАНИЕ
+# =========================
 
-log_msg "[INFO] Создание архива $BACKUP_FILE"
+log_msg "[INFO] Копирование на удаленный сервер"
 
-if ! tar -I "gzip -${COMPRESSION_LEVEL}" \
-          -cf "$BACKUP_PATH" \
-          -C "$DUMP_DIR" .; then
+for DB_NAME in "${SUCCESS_DUMPS[@]}"; do
 
-    add_error "Ошибка создания архива"
+    BACKUP_FILE="${BACKUP_PREFIX}_${DB_NAME}_${TIMESTAMP}.sql.gz"
+    BACKUP_PATH="${LOCAL_BACKUP_DIR}/${BACKUP_FILE}"
 
-    rm -rf "$DUMP_DIR"
-
-    finish_script
-fi
-
-# Удаляем временные дампы
-rm -rf "$DUMP_DIR"
-
-###########################################################################
-# ПРОВЕРКА ЦЕЛОСТНОСТИ АРХИВА
-###########################################################################
-
-log_msg "[INFO] Проверка целостности архива"
-
-if ! gzip -t "$BACKUP_PATH"; then
-
-    add_error "Создан поврежденный архив"
-
-    rm -f "$BACKUP_PATH"
-
-    finish_script
-fi
-
-###########################################################################
-# КОПИРОВАНИЕ НА УДАЛЕННЫЙ СЕРВЕР
-###########################################################################
-
-log_msg "[INFO] Копирование файла $BACKUP_FILE на $REMOTE_HOST"
-
-if ! ssh "$REMOTE_USER@$REMOTE_HOST" \
-     "mkdir -p '$REMOTE_BACKUP_DIR'"; then
-
-    add_error "Не удалось создать каталог на удаленном сервере"
-
-    finish_script
-fi
-
-COPY_RC=0
-
-case "$COPY_METHOD" in
-
-    RSYNC)
-
-        log_msg "[DETAIL] Метод: rsync"
+    if [ "$COPY_METHOD" == "RSYNC" ]; then
 
         rsync -avz -e ssh \
             "$BACKUP_PATH" \
             "$REMOTE_USER@$REMOTE_HOST:$REMOTE_BACKUP_DIR/"
 
-        COPY_RC=$?
-        ;;
+    else
 
-    SCP)
-
-        log_msg "[DETAIL] Метод: scp"
-
-        scp \
-            -o BatchMode=yes \
-            -o ConnectTimeout=30 \
-            "$BACKUP_PATH" \
+        scp "$BACKUP_PATH" \
             "$REMOTE_USER@$REMOTE_HOST:$REMOTE_BACKUP_DIR/"
+    fi
 
-        COPY_RC=$?
-        ;;
+    if [ $? -ne 0 ]; then
+        add_error "Ошибка копирования $DB_NAME"
+        continue
+    fi
 
-    *)
+    SUCCESS_COPIED+=("$DB_NAME")
 
-        add_error "Недопустимый метод копирования: $COPY_METHOD"
+done
 
-        finish_script
-        ;;
-esac
+# =========================
+# РОТАЦИЯ
+# =========================
 
-if [ "$COPY_RC" -ne 0 ]; then
+if [ "$HAS_ERROR" -eq 0 ]; then
+    log_msg "[INFO] Ротация старых бэкапов"
 
-    add_error "Ошибка копирования архива на удаленный сервер"
-
-    log_msg "[INFO] Ротация пропущена из-за ошибки копирования"
-
-    finish_script
+    find "$LOCAL_BACKUP_DIR" \
+        -name "${BACKUP_PREFIX}_*.sql.gz" \
+        -mtime +"$RETENTION_DAYS" \
+        -delete \
+        -print | tee -a "$LOG_FILE"
+else
+    log_msg "[INFO] Ротация пропущена из-за ошибок"
 fi
 
-###########################################################################
-# РОТАЦИЯ ЛОКАЛЬНЫХ БЭКАПОВ
-# Выполняется ТОЛЬКО после успешного копирования
-###########################################################################
+# =========================
+# ИТОГ
+# =========================
 
-log_msg "[INFO] Очистка локальных бэкапов старше $RETENTION_DAYS дней"
-
-find "$LOCAL_BACKUP_DIR" \
-    -name "${BACKUP_PREFIX}_*.tar.gz" \
-    -mtime +"$RETENTION_DAYS" \
-    -delete \
-    -print | tee -a "$LOG_FILE"
-
-###########################################################################
-# УСПЕШНОЕ ЗАВЕРШЕНИЕ
-###########################################################################
-
-log_msg "[SUCCESS] Резервное копирование завершено"
-
-log_msg "[INFO] Успешно сохранено баз: ${#SUCCESS_DUMPS[@]}"
-log_msg "[INFO] Размер архива: $(stat -c%s "$BACKUP_PATH") байт"
-log_msg "[INFO] Локальный файл: $BACKUP_FILE"
-log_msg "[INFO] Удаленный файл: $REMOTE_BACKUP_DIR/$BACKUP_FILE"
+log_msg "[SUCCESS] Успешно сохранено: ${#SUCCESS_DUMPS[@]} БД"
+log_msg "[SUCCESS] Успешно скопировано: ${#SUCCESS_COPIED[@]} БД"
 
 finish_script
