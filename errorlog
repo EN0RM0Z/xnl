@@ -1,0 +1,60 @@
+// n8n принимает пакет логов как массив внутри $json.body
+// Делаем проверку: если пришел массив — работаем с ним, если один лог — превращаем в массив
+const logBatch = Array.isArray($json.body) ? $json.body : [$json.body];
+const LATENCY_THRESHOLD = 2.0;
+const processedRows = [];
+
+// Перебираем каждую строку лога внутри принятого пакета
+for (const row of logBatch) {
+    const rawMessage = row.message || "";
+    if (!rawMessage.trim()) continue; // Пропускаем пустые строки, если они есть
+
+    // Приводим к верхнему регистру, чтобы поиск не зависел от регистра (Warn, warn, WARN)
+    const upperMessage = rawMessage.toUpperCase();
+
+    let loglevel = "INFO";
+    if (upperMessage.includes("ERROR") || upperMessage.includes("500") || upperMessage.includes("401")) {
+        loglevel = "ERROR";
+    } else if (upperMessage.includes("WARN") || upperMessage.includes("404")) {
+        loglevel = "WARN";
+    }
+
+    // Парсинг задержки (latency)
+    let latency = 0.05;
+    const latencyMatch = rawMessage.match(/(?:rt=|duration=|response_time=)(\d+\.?\d*)/);
+    if (latencyMatch) {
+        latency = parseFloat(latencyMatch[1]);
+    } else if (upperMessage.includes("SLOW") || upperMessage.includes("TIMEOUT")) {
+        latency = 5.0;
+    }
+
+    // РАБОЧИЙ ФИЛЬТР: Если это обычный INFO лог и система не тормозила — пропускаем его
+    if (loglevel === "INFO" && latency <= LATENCY_THRESHOLD) {
+        continue; 
+    }
+
+    // Очистка чувствительных данных (IP, таймстампы, ID сессий)
+    let cleanMessage = rawMessage;
+    cleanMessage = cleanMessage.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, "[IP_ADDRESS]");
+    cleanMessage = cleanMessage.replace(/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\\d{2}(?:\.\d+)?Z?/g, "[TIMESTAMP]");
+    cleanMessage = cleanMessage.replace(/(?:user_|id=|session_)\w+/gi, "[ID]");
+
+    // Генерация UUID для Qdrant
+    const id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+
+    // Добавляем обработанный лог в итоговый список
+    processedRows.push({
+        id,
+        original_message: rawMessage,
+        clean_message: cleanMessage,
+        loglevel,
+        latency,
+        timestamp: new Date().toISOString()
+    });
+}
+
+// Возвращаем массив объектов. n8n автоматически разделит его на отдельные Items
+return processedRows;
