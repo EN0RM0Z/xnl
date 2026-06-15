@@ -1,0 +1,28 @@
+Найдите блок // --- НОВОЕ: ТОЧНОЕ ОПРЕДЕЛЕНИЕ УРОВНЯ ЛОГИРОВАНИЯ --- и замените его на этот фрагмент, который корректно парсит уровень лога сразу после даты:
+
+
+// --- ИСПРАВЛЕННОЕ ОПРЕДЕЛЕНИЕ УРОВНЯ ЛОГИРОВАНИЯ ---
+        let loglevel = "INFO";
+        // Ищем паттерн: Сначала дата, потом пробелы, потом слово-уровень
+        const levelMatch = singleLineMessage.match(/^\d{4}[-\/]\d{2}[-\/]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?Z?\s+([A-Z]+)\b/i);
+        
+        if (levelMatch) {
+            loglevel = levelMatch[1].toUpperCase();
+        } else {
+            // Резерв: ищем уровень в начале строки, если формат даты иной
+            const fallbackMatch = singleLineMessage.substring(0, 40).match(/\b(ERROR|WARN|WARNING|INFO|FATAL|DEBUG|TRACE|CRITICAL)\b/i);
+            if (fallbackMatch) {
+                loglevel = fallbackMatch[1].toUpperCase();
+            }
+        }
+        if (loglevel === "WARNING") loglevel = "WARN";
+
+
+Найдите строку:
+const logTimestamp = new Date().toISOString();
+
+Замените её на код, который извлекает дату прямо из текста лога:
+// Извлекаем дату и время из начала лога (первые 23 символа: 2026-06-14 10:06:02,322)
+        const dateMatch = singleLineMessage.match(/^(\d{4}[-\/]\d{2}[-\/]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)/);
+        const logTimestamp = dateMatch ? dateMatch[1].replace(",", ".") : new Date().toISOString();
+
