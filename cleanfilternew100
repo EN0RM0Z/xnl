@@ -1,0 +1,19 @@
+Шаг 1: Откройте ноду «Фильтрация и Очистка»
+Дважды кликните по ноде с JS-кодом в n8n, чтобы открыть редактор скрипта.
+
+Шаг 2: Найдите блок очистки данных
+Прокрутите код примерно до середины, где вы увидите строки, отвечающие за вырезание IP-адресов и дат:
+
+// Очистка чувствительных данных
+        let cleanMessage = rawMessage;
+        cleanMessage = cleanMessage.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, "[IP_ADDRESS]");
+        cleanMessage = cleanMessage.replace(/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/g, "[TIMESTAMP]");
+
+Шаг 3: Добавьте новый код
+Сразу после этих строк (или после любых других строк cleanMessage = cleanMessage.replace(...)), вставьте следующий фрагмент:
+
+// Очистка ID транзакций Arjuna (формат 0:ffff...:9d1d:...)
+        cleanMessage = cleanMessage.replace(/\b[a-zA-Z0-9]+(?::[a-zA-Z0-9]+){3,}\b/g, "[TX_ID]");
+        
+        // Очистка хэшей Java-объектов (формат @b254dcf)
+        cleanMessage = cleanMessage.replace(/@[0-9a-fA-F]+\b/g, "@[HASH]");
