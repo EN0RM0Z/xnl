@@ -1,0 +1,162 @@
+{
+  "name": "Логи - Шаг 1: ETL Инжект (Абсолютная защита от дублей)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-ingest",
+        "options": {}
+      },
+      "id": "webhook-ingest",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [ 800, 300 ],
+      "webhookId": "c7a01cb9-f3b9-48d8-a656-40fb3366e121"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst aggregated = {};\nconst LATENCY_THRESHOLD = 2.0;\n\nfor (const item of allItems) {\n    const logBatch = Array.isArray(item.json.body) ? item.json.body : [item.json.body];\n    \n    for (const row of logBatch) {\n        const rawMessage = row.message || \"\";\n        if (!rawMessage.trim()) continue;\n\n        let singleLineMessage = rawMessage.split(/\\r?\\n/)[0];\n        const inlineStackTraceRegex = /[\\t ]+at\\s+[a-zA-Z0-9_$]+(?:\\.[a-zA-Z0-9_$]+)+/g;\n        const match = inlineStackTraceRegex.exec(singleLineMessage);\n        if (match) singleLineMessage = singleLineMessage.substring(0, match.index);\n        if (!singleLineMessage.trim()) continue;\n\n        let logTimestamp = new Date().toISOString();\n        const dateMatch = singleLineMessage.match(/^(\\d{4}[-\\/]\\d{2}[-\\/]\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?)/);\n        if (dateMatch) {\n            logTimestamp = dateMatch[1].replace(' ', 'T').replace(',', '.');\n        }\n\n        let loglevel = \"INFO\";\n        const levelMatch = singleLineMessage.match(/^\\d{4}[-\\/]\\d{2}[-\\/]\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?Z?\\s+([A-Z]+)\\b/i);\n        if (levelMatch) {\n            loglevel = levelMatch[1].toUpperCase();\n        } else {\n            const fallbackMatch = singleLineMessage.substring(0, 40).match(/\\b(ERROR|WARN|WARNING|INFO|FATAL|DEBUG|TRACE|CRITICAL)\\b/i);\n            if (fallbackMatch) loglevel = fallbackMatch[1].toUpperCase();\n        }\n        if (loglevel === \"WARNING\") loglevel = \"WARN\";\n\n        let latency = 0.05;\n        const latencyMatch = singleLineMessage.match(/(?:rt=|duration=|response_time=)(\\d+\\.?\\d*)/);\n        if (latencyMatch) {\n            latency = parseFloat(latencyMatch[1]);\n        } else if (/\\bSLOW\\b|\\bTIMEOUT\\b/.test(singleLineMessage.toUpperCase())) {\n            latency = 5.0;\n        }\n\n        if (loglevel === \"INFO\" && latency <= LATENCY_THRESHOLD) continue;\n\n        let cleanMessage = singleLineMessage.trim();\n        cleanMessage = cleanMessage.replace(/\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b/g, \"[IP_ADDRESS]\");\n        cleanMessage = cleanMessage.replace(/\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?Z?/g, \"[TIMESTAMP]\");\n        cleanMessage = cleanMessage.replace(/\\d{4}\\/\\d{2}\\/\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?Z?/g, \"[TIMESTAMP]\");\n        cleanMessage = cleanMessage.replace(/executor-thread-\\d+/gi, \"executor-thread-XXX\");\n        cleanMessage = cleanMessage.replace(/(realmid|realm_id)\\s*=\\s*\"[^\"]*\"/gi, '$1=\"[REALM_ID]\"');\n        cleanMessage = cleanMessage.replace(/(username|user_name|user)\\s*=\\s*\"[^\"]*\"/gi, '$1=\"[USER_NAME]\"');\n        cleanMessage = cleanMessage.replace(/(code\\s+id|code_id)\\s*=\\s*\"[^\"]*\"/gi, '$1=\"[CODE_ID]\"');\n        cleanMessage = cleanMessage.replace(/(redirect_uri)\\s*=\\s*\"[^\"]*\"/gi, '$1=\"[REDIRECT_URI]\"');\n        cleanMessage = cleanMessage.replace(/(?:user_|id=|session_|token_)\\w+/gi, \"[ID]\");\n        cleanMessage = cleanMessage.trim();\n\n        if (!cleanMessage || cleanMessage === \"\") continue;\n\n        const testPayload = cleanMessage.replace(/\\[[A-Z_]+\\]/g, \"\").replace(/executor-thread-XXX/g, \"\").replace(/\\b(INFO|WARN|ERROR|DEBUG|TRACE|FATAL|CRITICAL)\\b/gi, \"\").replace(/[^a-zA-Z0-9а-яА-Я]/g, \"\").trim();\n        if (testPayload.length === 0) continue;\n\n        if (aggregated[cleanMessage]) {\n            aggregated[cleanMessage].batch_count += 1;\n            aggregated[cleanMessage].batch_times.push(logTimestamp);\n        } else {\n            const id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n                const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);\n                return v.toString(16);\n            });\n            aggregated[cleanMessage] = {\n                id,\n                original_message: rawMessage,\n                clean_message: cleanMessage,\n                loglevel,\n                latency,\n                batch_count: 1,\n                batch_times: [logTimestamp]\n            };\n        }\n    }\n}\n\nreturn Object.values(aggregated).map(item => {\n    const escaped = item.clean_message.replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n').replace(/\\r/g, '\\\\r');\n    return {\n        json: {\n            id: item.id,\n            original_message: item.original_message,\n            clean_message: item.clean_message,\n            clean_message_escaped: escaped,\n            loglevel: item.loglevel,\n            latency: item.latency,\n            batch_count: item.batch_count,\n            batch_times: item.batch_times.join('; '),\n            timestamp: item.batch_times[0]\n        }\n    };\n});"
+      },
+      "id": "js-filter-clean",
+      "name": "Фильтрация и Очистка",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [ 1020, 300 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/embeddings",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"bge-m3\",\n  \"prompt\": \"{{ $json.clean_message_escaped }}\"\n}"
+      },
+      "id": "embed-ollama",
+      "name": "Ollama - Эмбеддинг",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [ 1240, 200 ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "http://qdrant:6333/collections/system_logs/points?wait=true",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"points\": [\n    {\n      \"id\": \"{{ $('Фильтрация и Очистка').item.json.id }}\",\n      \"vector\": {{ JSON.stringify($json.embedding) }},\n      \"payload\": {\n        \"original_log\": \"{{ $('Фильтрация и Очистка').item.json.clean_message_escaped }}\",\n        \"timestamp\": \"{{ $('Фильтрация и Очистка').item.json.timestamp }}\",\n        \"loglevel\": \"{{ $('Фильтрация и Очистка').item.json.loglevel }}\",\n        \"latency\": {{ $('Фильтрация и Очистка').item.json.latency }}\n      }\n    }\n  ]\n}"
+      },
+      "id": "qdrant-write",
+      "name": "Qdrant API - Запись",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [ 1460, 200 ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO public.logs (cleanmessage, count, answer, times) \nVALUES (\n  '{{ $json.clean_message.replace(/'/g, \"''\") }}', \n  {{ $json.batch_count }}, \n  NULL, \n  '{{ $json.batch_times }}'\n) \nON CONFLICT (cleanmessage) \nDO UPDATE SET \n  count = public.logs.count + EXCLUDED.count, \n  times = public.logs.times || '; ' || EXCLUDED.times\nRETURNING id, count;"
+      },
+      "id": "postgres-upsert",
+      "name": "Поиск или Инкремент в Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [ 1240, 420 ],
+      "credentials": {
+        "postgres": {
+          "id": "nIivxWlWNhuNxUzx",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.count }}",
+              "operation": "equal",
+              "value2": "={{ $('Фильтрация и Очистка').item.json.batch_count }}"
+            }
+          ]
+        }
+      },
+      "id": "if-new-log",
+      "name": "Новый лог?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [ 1460, 420 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.1.35:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-oss:120b-cloud\",\n  \"prompt\": \"Ты — ведущий системный инженер и эксперт по сопровождению Keycloak. Тебе представлен лог Keyclaok версии 25.0.6 Твоя задача: Если в логе есть ошибка или предупреждение, дать КРАТКИЙ И ТОЧНЫЙ ответ: КАКОВЫ ПРИЧИНЫ, НАСКОЛЬКО КРИТИЧНА И КАК УСТРАНИТЬ. Если лог информационный сообщи ЧТО ЛОГ ИНФОРМАЦИОННЫЙ.\\n\\nСТРОГИЙ КОНТЕКСТ С РЕЛЕВАНТНЫМИ ЛОГОМ:\\n{{ $('Фильтрация и Очистка').item.json.clean_message_escaped }} \\n\\n Используй Markdown для красивого оформления таблиц, списков и блоков кода.  Из логов вырезаны такие данные как дата/время, идентификаторы, токены и тому подобные данные в целях безопасности: НЕ НУЖНО НА ЭТО ОБРАЩАТЬ ВНИМАНИЕ И УКАЗЫВАТЬ\",\n  \"stream\": false\n}"
+      },
+      "id": "ollama-analyze",
+      "name": "Получить комментарий по ошибке",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [ 1680, 400 ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE public.logs \nSET answer = '{{ $json.response.replace(/'/g, \"''\") }}' \nWHERE id = {{ $('Поиск или Инкремент в Postgres').item.json.id }};"
+      },
+      "id": "postgres-save-ai",
+      "name": "Сохранить комментарий ИИ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [ 1900, 400 ],
+      "credentials": {
+        "postgres": {
+          "id": "nIivxWlWNhuNxUzx",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [ { "node": "Фильтрация и Очистка", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Фильтрация и Очистка": {
+      "main": [
+        [
+          { "node": "Ollama - Эмбеддинг", "type": "main", "index": 0 },
+          { "node": "Поиск или Инкремент в Postgres", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Ollama - Эмбеддинг": {
+      "main": [
+        [ { "node": "Qdrant API - Запись", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Поиск или Инкремент в Postgres": {
+      "main": [
+        [ { "node": "Новый лог?", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Новый лог?": {
+      "main": [
+        [ { "node": "Получить комментарий по ошибке", "type": "main", "index": 0 } ],
+        []
+      ]
+    },
+    "Получить комментарий по ошибке": {
+      "main": [
+        [ { "node": "Сохранить комментарий ИИ", "type": "main", "index": 0 } ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
