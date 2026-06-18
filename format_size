@@ -1,0 +1,19 @@
+format_size() {
+
+    local SIZE=$1
+
+    if [ "$SIZE" -ge 1073741824 ]; then
+        awk "BEGIN {printf \"%.2f GB\", $SIZE/1073741824}"
+    elif [ "$SIZE" -ge 1048576 ]; then
+        awk "BEGIN {printf \"%.2f MB\", $SIZE/1048576}"
+    elif [ "$SIZE" -ge 1024 ]; then
+        awk "BEGIN {printf \"%.2f KB\", $SIZE/1024}"
+    else
+        echo "${SIZE} B"
+    fi
+}
+
+
+HUMAN_SIZE=$(format_size "$SIZE")
+
+log_msg "[INFO] $DB_NAME успешно сохранена ($HUMAN_SIZE)"
