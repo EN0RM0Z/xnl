@@ -1,0 +1,135 @@
+{
+  "name": "Логи-2: Дашборд",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "dashboard",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "adabb78d-7ceb-40f3-8aa5-07d8cdab8bc1",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "454d6063-3937-4e78-8436-4b7c68dfa3c9",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "wImq4R6pw3dj1W0p",
+          "name": "Unnamed credential 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    e.id AS event_id, \n    p.cleanmessage, \n    p.loglevel, \n    e.log_date, \n    e.server_name, \n    e.count, \n    p.answer, \n    e.times \nFROM public.log_events e \nJOIN public.log_patterns p ON e.pattern_id = p.id \nWHERE e.log_date >= CURRENT_DATE - INTERVAL '10 days' \nORDER BY e.log_date DESC, e.count DESC;",
+        "options": {}
+      },
+      "id": "22536f41-076b-422a-aaef-a33b78c24a6d",
+      "name": "Запрос логов (10 дней)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        224,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "nIivxWlWNhuNxUzx",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "let items = $input.all();\n\nif (items.length === 1 && items[0].json && Object.keys(items[0].json).length === 0) {\n    items = [];\n}\n\nlet totalEvents = 0;\nlet totalInfos = 0;\nlet totalErrors = 0;\nlet totalWarns = 0;\n\nconst uniqueDates = new Set();\nconst uniqueServers = new Set();\nconst patterns = {};\n\nitems.forEach(item => {\n    const row = item.json;\n    const msg = row.cleanmessage || '';\n    let level = row.loglevel || 'INFO';\n    const count = parseInt(row.count || 1);\n    const serverName = row.server_name || 'UNKNOWN';\n    const dateStr = row.log_date ? row.log_date.split('T')[0] : 'N/A';\n    const times = row.times || 'Нет данных';\n    const aiResponse = row.answer || '_Анализ еще не выполнялся или лог ожидает обработки._';\n\n    if (level === 'ERROR' || level === 'FATAL') {\n        totalErrors += count;\n    }\n    else if (level === 'WARN' || level === 'WARNING') {\n        totalWarns += count;\n    }\n    else {\n        totalInfos += count;\n    }\n    \n    totalEvents += count;\n    \n    uniqueDates.add(dateStr);\n    uniqueServers.add(serverName);\n\n    if (!patterns[msg]) {\n        patterns[msg] = {\n            message: msg,\n            level: level,\n            totalCount: 0,\n            aiResponse: aiResponse,\n            servers: {},\n            allDates: new Set(),\n            allServers: new Set()\n        };\n    }\n\n    const p = patterns[msg];\n    p.totalCount += count;\n    p.allDates.add(dateStr);\n    p.allServers.add(serverName);\n\n    if (!p.servers[serverName]) {\n        p.servers[serverName] = {\n            serverName: serverName,\n            totalCount: 0,\n            dates: {}\n        };\n    }\n\n    const s = p.servers[serverName];\n    s.totalCount += count;\n\n    if (!s.dates[dateStr]) {\n        s.dates[dateStr] = {\n            times: [],\n            count: 0\n        };\n    }\n    const d = s.dates[dateStr];\n    d.count += count;\n    if (times && times !== 'Нет данных') {\n        d.times.push(times);\n    }\n});\n\nlet rowsHtml = '';\n\nObject.values(patterns).forEach(p => {\n    const level = p.level;\n    const badgeClass =\n        (level === 'ERROR' || level === 'FATAL') ? 'badge-error'\n        : (level === 'WARN' || level === 'WARNING') ? 'badge-warn'\n        : 'badge-info';\n\n    const safeMsg = p.message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n    const encodedMarkdown = encodeURIComponent(p.aiResponse);\n    const datesAttr = Array.from(p.allDates).join(' ');\n    const serversAttr = Array.from(p.allServers).map(s => s.replace(/\\s+/g, '_')).join(' ');\n\n    let serversHtml = '';\n    Object.values(p.servers).forEach(s => {\n        const safeServerName = s.serverName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\n        let tableRowsHtml = '';\n        Object.keys(s.dates).forEach(dStr => {\n            const dateData = s.dates[dStr];\n            const chron = dateData.times.length > 0 ? dateData.times.join(', ') : 'Нет данных';\n            tableRowsHtml += `\\n                <tr data-row-date=\"${dStr}\">\\n                    <td>${dStr}</td>\\n                    <td><code>${chron}</code></td>\\n                    <td>${dateData.count}</td>\\n                </tr>`;\n        });\n\n        serversHtml += `\\n        <details class=\"server-details\" data-server-name=\"${s.serverName.replace(/\"/g, '&quot;')}\">\\n            <summary class=\"server-summary\">\\n                <span>🖥️ ${safeServerName}</span>\\n                <span class=\"server-count\">Повторов: <strong>${s.totalCount}</strong></span>\\n            </summary>\\n            <div class=\"server-content\">\\n                <table class=\"server-table\">\\n                    <thead>\\n                        <tr>\\n                            <th>Дата</th>\\n                            <th>Хронология</th>\\n                            <th>Повторов за текущий день</th>\\n                        </tr>\\n                    </thead>\\n                    <tbody>${tableRowsHtml}\\n                    </tbody>\\n                </table>\\n            </div>\\n        </details>`;\n    });\n\n    rowsHtml += `\\n    <div class=\"log-card\" data-level=\"${level}\" data-dates=\"${datesAttr}\" data-servers=\"${serversAttr}\">\\n        <div class=\"log-header\">\\n            <span class=\"badge ${badgeClass}\">${level}</span>\\n            <span class=\"log-count\">🔁 Повторов: <strong>${p.totalCount}</strong></span>\\n        </div>\\n        <div class=\"log-body\">\\n            <code>${safeMsg}</code>\\n        </div>\\n        <div class=\"log-servers-section\">${serversHtml}\\n        </div>\\n        <details class=\"ai-details\">\\n            <summary class=\"ai-summary\">\\n                💡 Анализ инцидента и решение от ИИ (Qwen-Coder)\\n            </summary>\\n            <div class=\"ai-content\" data-markdown=\"${encodedMarkdown}\">\\n                Загрузка анализа...\\n            </div>\\n        </details>\\n    </div>`;\n});\n\nconst dateOptions = Array.from(uniqueDates).sort().reverse().map(d => `<option value=\"${d}\">${d}</option>`).join('');\nconst serverOptions = Array.from(uniqueServers).sort().map(s => `<option value=\"${s}\">${s}</option>`).join('');\n\nconst html = `<!DOCTYPE html>\\n<html lang=\"ru\">\\n<head>\\n<meta charset=\"UTF-8\">\\n<title>AI Log Observer (Нормализованный)</title>\\n<script src=\"https://cdn.jsdelivr.net/npm/marked/marked.min.js\"><\\/script>\\n<style>\\nbody { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }\\n.container { max-width: 1200px; margin: 0 auto; }\\n.header { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 25px; border-radius: 12px; border: 1px solid #334155; margin-bottom: 25px; position: relative; }\\n.header h1 { margin: 0; font-size: 24px; color: #38bdf8; }\\n.header p { margin: 5px 0 0 0; color: #94a3b8; font-size: 14px; }\\n.auth-badge { position: absolute; top: 25px; right: 25px; background-color: #064e3b; color: #34d399; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; border: 1px solid #059669; }\\n.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 25px; }\\n.stat-card { background-color: #1e293b; padding: 20px; border-radius: 10px; border: 1px solid #334155; text-align: center; }\\n.stat-card h3 { margin: 0; font-size: 14px; color: #94a3b8; text-transform: uppercase; }\\n.stat-card .value { font-size: 32px; font-weight: bold; margin-top: 10px; }\\n.stat-blue { color: #38bdf8; }\\n.stat-amber { color: #fbbf24; }\\n.stat-red { color: #f87171; }\\n.filters { margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }\\n.filter-group { display: flex; gap: 10px; }\\n.dropdown-group { display: flex; gap: 10px; margin-left: auto; align-items: center; }\\n.filter-btn { background-color: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; }\\n.filter-btn:hover { background-color: #334155; }\\n.filter-btn.active { background-color: #38bdf8; color: #0f172a; border-color: #38bdf8; }\\nselect { background-color: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 8px 12px; border-radius: 6px; outline: none; font-size: 14px; }\\n.log-card { background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 15px; margin-bottom: 15px; }\\n.log-header { display: flex; flex-wrap: wrap; gap: 15px; align-items: center; margin-bottom: 10px; font-size: 13px; }\\n.badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 11px; }\\n.badge-error { background-color: #7f1d1d; color: #fca5a5; }\\n.badge-warn { background-color: #78350f; color: #fcd34d; }\\n.badge-info { background-color: #0c4a6e; color: #7dd3fc; }\\n.log-count { color: #cbd5e1; }\\n.log-body { background-color: #0f172a; padding: 12px; border-radius: 6px; border: 1px solid #1e293b; overflow-x: auto; margin-bottom: 12px; }\\n.log-body code { font-family: Consolas, Monaco, monospace; color: #f1f5f9; font-size: 13px; white-space: pre-wrap; }\\n.log-servers-section { margin-bottom: 12px; }\\n.server-details { background-color: #141b2d; border: 1px solid #27272a; border-radius: 6px; margin-bottom: 6px; overflow: hidden; }\\n.server-summary { padding: 10px 15px; cursor: pointer; background-color: #0b0f19; font-size: 13px; color: #cbd5e1; display: flex; justify-content: space-between; align-items: center; }\\n.server-summary:hover { background-color: #1e293b; }\\n.server-count { color: #cbd5e1; font-size: 12px; }\\n.server-content { padding: 15px; background-color: #090d16; border-top: 1px solid #27272a; }\\n.server-table { border-collapse: collapse; width: 100%; font-size: 12px; color: #cbd5e1; }\\n.server-table th, .server-table td { border: 1px solid #334155; padding: 8px; text-align: left; }\\n.server-table th { background-color: #1e293b; color: #38bdf8; }\\n.server-table td code { font-family: Consolas, Monaco, monospace; color: #fbbf24; }\\n.ai-details { background-color: #090d16; border: 1px solid #27272a; border-radius: 6px; overflow: hidden; }\\n.ai-summary { padding: 10px 15px; cursor: pointer; background-color: #141b2d; font-size: 13px; font-weight: bold; color: #a78bfa; }\\n.ai-summary:hover { background-color: #1d2844; }\\n.ai-content { padding: 15px; font-size: 13px; line-height: 1.6; color: #cbd5e1; border-top: 1px solid #27272a; background-color: #0b0f19; }\\n.ai-content h1, .ai-content h2, .ai-content h3, .ai-content h4 { color: #7dd3fc; }\\n.ai-content code { background-color: #1e293b; padding: 2px 5px; border-radius: 4px; color: #fbbf24; }\\n.ai-content pre { background-color: #0f172a; padding: 12px; border-radius: 6px; overflow-x: auto; }\\n.ai-content table { border-collapse: collapse; width: 100%; margin-top: 10px; }\\n.refresh-btn { position: absolute; top: 65px; right: 25px; background-color: #38bdf8; color: #0f172a; border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-weight: 600; }\\n.refresh-btn:hover { background-color: #7dd3fc; }\\n.refresh-btn:disabled { opacity: 0.7; cursor: wait; }\\n.ai-content th, .ai-content td { border: 1px solid #334155; padding: 8px; }\\n.ai-content th { background-color: #1e293b; }\\n.no-data { text-align: center; color: #64748b; padding: 40px; font-size: 16px; }\\n</style>\\n</head>\\n<body>\\n<div class=\"container\">\\n    <div class=\"header\">\\n        <h1>AI Log Observer</h1>\\n        <p>Детализированный учет по Датам и Серверам</p>\\n        <div class=\"auth-badge\">🟢 Режим: Без ограничений</div>\\n        <button class=\"refresh-btn\" onclick=\"refreshDashboard()\">🔄 Обновить</button>\\n    </div>\\n    <div class=\"stats-grid\">\\n        <div class=\"stat-card\"><h3>Уникальных записей</h3><div class=\"value stat-blue\">${Object.keys(patterns).length}</div></div>\\n        <div class=\"stat-card\"><h3>Всего событий (сумма)</h3><div class=\"value stat-blue\">${totalEvents}</div></div>\\n        <div class=\"stat-card\"><h3>Предупреждения (WARN)</h3><div class=\"value stat-amber\">${totalWarns}</div></div>\\n        <div class=\"stat-card\"><h3>Критические ошибки (ERROR)</h3><div class=\"value stat-red\">${totalErrors}</div></div>\\n    </div>\\n    <div class=\"filters\">\\n        <div class=\"filter-group\">\\n            <button class=\"filter-btn active\" data-btn-level=\"ALL\">Все уровни</button>\\n            <button class=\"filter-btn\" data-btn-level=\"ERROR\">ERROR</button>\\n            <button class=\"filter-btn\" data-btn-level=\"WARN\">WARN</button>\\n            <button class=\"filter-btn\" data-btn-level=\"INFO\">INFO</button>\\n        </div>\\n        <div class=\"dropdown-group\">\\n            <label style=\"color:#94a3b8; font-size:14px;\">📅 Дата:</label>\\n            <select id=\"filter-date\">\\n                <option value=\"ALL\">Все даты</option>\\n                ${dateOptions}\\n            </select>\\n            <label style=\"color:#94a3b8; font-size:14px; margin-left:10px;\">🖥️ Сервер:</label>\\n            <select id=\"filter-server\">\\n                <option value=\"ALL\">Все серверы</option>\\n                ${serverOptions}\\n            </select>\\n        </div>\\n    </div>\\n    <div class=\"log-feed\">\\n        ${rowsHtml || '<div class=\"no-data\">За последние 10 дней инцидентов не обнаружено. База пуста.</div>'}\\n    </div>\\n</div>\\n<script>\\nlet activeLevel = 'ALL';\\nfunction applyFilters() {\\n    const activeDate = document.getElementById('filter-date').value;\\n    const activeServer = document.getElementById('filter-server').value;\\n    document.querySelectorAll('.log-card').forEach(card => {\\n        const cLevel = card.getAttribute('data-level');\\n        const cDatesAttr = card.getAttribute('data-dates') || '';\\n        const cServersAttr = card.getAttribute('data-servers') || '';\\n        const cDates = cDatesAttr.split(' ');\\n        const cServers = cServersAttr.split(' ').map(s => s.replace(/_/g, ' '));\\n        const matchL = activeLevel === 'ALL' || cLevel === activeLevel || (activeLevel === 'ERROR' && cLevel === 'FATAL') || (activeLevel === 'WARN' && cLevel === 'WARNING');\\n        const matchD = activeDate === 'ALL' || cDates.includes(activeDate);\\n        const matchS = activeServer === 'ALL' || cServers.includes(activeServer);\\n        if (!matchL) { card.style.display = 'none'; return; }\\n        let cardHasVisibleServers = false;\\n        card.querySelectorAll('.server-details').forEach(serverBlock => {\\n            const serverName = serverBlock.getAttribute('data-server-name');\\n            const matchS = activeServer === 'ALL' || serverName === activeServer;\\n            if (!matchS) { serverBlock.style.display = 'none'; return; }\\n            let serverHasVisibleDates = false;\\n            serverBlock.querySelectorAll('.server-table tbody tr').forEach(row => {\\n                const rowDate = row.getAttribute('data-row-date');\\n                const matchD = activeDate === 'ALL' || rowDate === activeDate;\\n                if (matchD) { row.style.display = ''; serverHasVisibleDates = true; } else { row.style.display = 'none'; }\\n            });\\n            if (serverHasVisibleDates) { serverBlock.style.display = 'block'; cardHasVisibleServers = true; } else { serverBlock.style.display = 'none'; }\\n        });\\n        card.style.display = cardHasVisibleServers ? 'block' : 'none';\\n    });\\n}\\ndocument.querySelectorAll('.filter-btn').forEach(btn => {\\n    btn.addEventListener('click', (e) => {\\n        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));\\n        e.target.classList.add('active');\\n        activeLevel = e.target.getAttribute('data-btn-level');\\n        applyFilters();\\n    });\\n});\\ndocument.getElementById('filter-date').addEventListener('change', applyFilters);\\ndocument.getElementById('filter-server').addEventListener('change', applyFilters);\\ndocument.querySelectorAll('.ai-content').forEach(el => {\\n    const encoded = el.dataset.markdown || '';\\n    const markdown = decodeURIComponent(encoded);\\n    if (markdown.trim()) { el.innerHTML = marked.parse(markdown); } else { el.innerHTML = '<em>Анализ отсутствует</em>'; }\\n});\\nfunction refreshDashboard() {\\n    const btn = document.querySelector('.refresh-btn');\\n    btn.disabled = true;\\n    btn.innerHTML = '⏳ Обновление...';\\n    location.reload();\\n}\\nsetTimeout(() => { location.reload(); }, 300000);\\n<\\/script>\\n</body>\\n</html>`;\n\nreturn [\n    {\n        json: {\n            html\n        }\n    }\n];"
+      },
+      "id": "787da246-b563-418c-bc31-3bdf793922b2",
+      "name": "Генератор HTML страницы",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "e12328ba-d84c-43c2-b8f7-afa53496bdc5",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        672,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Запрос логов (10 дней)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Запрос логов (10 дней)": {
+      "main": [
+        [
+          {
+            "node": "Генератор HTML страницы",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Генератор HTML страницы": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "b56db921-87d6-46ba-867c-39d163c383bc",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "97f1ed73e68db03755086e9ea601cfc8f3efdefd9ffb8bd617070fb96ea5f52e"
+  },
+  "id": "pafKpLJ0QP51AYRU",
+  "tags": []
+}
