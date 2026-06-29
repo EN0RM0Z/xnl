@@ -1,0 +1,66 @@
+{
+  "name": "Postgres to SMTP with Zip",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM your_table_name;"
+      },
+      "id": "postgres",
+      "name": "Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {},
+      "id": "csv-convert",
+      "name": "Convert to CSV",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "operation": "compress",
+        "fileName": "data.zip"
+      },
+      "id": "zip-compress",
+      "name": "Compress",
+      "type": "n8n-nodes-base.compress",
+      "typeVersion": 1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "your-email@example.com",
+        "toEmail": "recipient@example.com",
+        "subject": "Ежедневная выгрузка данных",
+        "text": "Во вложении сжатый файл с данными.",
+        "attachments": "binaryData"
+      },
+      "id": "smtp-send",
+      "name": "SMTP",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [860, 300],
+      "credentials": {
+        "smtp": {
+          "id": "your-smtp-creds",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Postgres": {
+      "main": [[{"node": "Convert to CSV", "type": "main", "index": 0}]]
+    },
+    "Convert to CSV": {
+      "main": [[{"node": "Compress", "type": "main", "index": 0}]]
+    },
+    "Compress": {
+      "main": [[{"node": "SMTP", "type": "main", "index": 0}]]
+    }
+  }
+}
