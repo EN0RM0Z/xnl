@@ -1,0 +1,18 @@
+# Минимально необходимое свободное место на разделе с резервными копиями (в ГБ)
+MIN_FREE_SPACE_GB=100
+
+И заменить текущую проверку на следующую:
+
+# Проверка свободного места
+MIN_FREE_SPACE_KB=$((MIN_FREE_SPACE_GB * 1024 * 1024))
+
+AVAILABLE_SPACE_KB=$(df -k --output=avail "$LOCAL_BACKUP_DIR" | awk 'NR==2 {print $1}')
+
+AVAILABLE_SPACE_GB=$(awk "BEGIN {printf \"%.1f\", $AVAILABLE_SPACE_KB/1024/1024}")
+
+log_msg "[INFO] Свободное место на разделе с резервными копиями: ${AVAILABLE_SPACE_GB} GB"
+
+if [ "$AVAILABLE_SPACE_KB" -lt "$MIN_FREE_SPACE_KB" ]; then
+    add_error "Недостаточно свободного места. Доступно ${AVAILABLE_SPACE_GB} GB, требуется не менее ${MIN_FREE_SPACE_GB} GB."
+    finish_script
+fi
