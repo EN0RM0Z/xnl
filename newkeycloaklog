@@ -1,0 +1,89 @@
+Логирование Keycloak
+
+В keycloak.conf установи:
+
+log-level=INFO,\
+org.keycloak.authentication:DEBUG,\
+org.keycloak.authentication.authenticators.browser:TRACE,\
+org.keycloak.federation.kerberos:TRACE,\
+org.keycloak.events:DEBUG
+
+Если сейчас у тебя уже есть только org.keycloak.federation.kerberos:TRACE, добавь и остальные категории.
+
+JVM Kerberos
+
+В systemd (или где задается JAVA_OPTS_APPEND):
+
+-Dsun.security.krb5.debug=true
+-Dsun.security.jgss.debug=true
+-Djavax.security.auth.useSubjectCredsOnly=false
+
+Оставь также
+
+-Djava.security.krb5.conf=/opt/keycloak/current/conf/kerberos/krb5.conf
+Что мы хотим увидеть
+
+Нас интересуют строки вида:
+
+SPNEGOAuthenticator
+Authorization
+Negotiate
+GSSContext
+AP-REQ
+principal
+Defective token
+KrbException
+2. Nginx
+
+Именно здесь, скорее всего, можно будет подтвердить или исключить обрезание заголовка.
+
+Если сейчас используется стандартный access_log
+
+Создаем отдельный формат.
+
+Например:
+
+log_format spnego
+'$remote_addr '
+'[$time_local] '
+'"$request" '
+'status=$status '
+'body=$body_bytes_sent '
+'req_len=$request_length '
+'auth_len=$content_length '
+'host="$host" '
+'uri="$request_uri" '
+'auth="$http_authorization"';
+
+Замечание: переменная auth_len=$content_length не показывает длину Authorization. В стандартном nginx нет встроенной переменной с длиной конкретного заголовка. Она приведена лишь как пример того, что полезно логировать.
+
+Затем:
+
+access_log /var/log/nginx/spnego_access.log spnego;
+Лог ошибок
+
+На время диагностики:
+
+error_log /var/log/nginx/spnego_error.log debug;
+
+Это очень подробный уровень, поэтому включать его лучше ненадолго.
+
+3. Увеличить лимиты nginx
+
+Если их еще нет:
+
+large_client_header_buffers 8 64k;
+client_header_buffer_size 16k;
+
+И проверить:
+
+proxy_buffer_size 64k;
+proxy_buffers 8 64k;
+
+Хотя они относятся к ответам, лучше убедиться, что конфигурация не слишком "узкая".
+
+4. Keycloak
+
+Я бы сразу поставил
+
+http-max-header-size=65536
