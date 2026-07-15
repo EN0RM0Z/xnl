@@ -1,0 +1,68 @@
+Да, в вашем случае я бы остановился именно на такой команде.
+
+pg_restore \
+    -h <DNS_или_IP_Patroni> \
+    -p 5432 \
+    -U klkt25user \
+    -d klkt25 \
+    --no-owner \
+    --no-privileges \
+    --verbose \
+    --exit-on-error \
+    /home/user5/ku.dump
+
+Например, если DNS Patroni называется patroni.company.local:
+
+pg_restore \
+    -h patroni.company.local \
+    -p 5432 \
+    -U klkt25user \
+    -d klkt25 \
+    --no-owner \
+    --no-privileges \
+    --verbose \
+    --exit-on-error \
+    /home/user5/ku.dump
+Почему именно так
+-h — подключение к VIP/DNS Patroni, а не к конкретному серверу PostgreSQL.
+-U klkt25user — подключение под пользователем, который будет работать с базой.
+-d klkt25 — целевая база.
+--no-owner — игнорировать владельцев из исходной базы.
+--no-privileges — не восстанавливать старые GRANT/REVOKE.
+--verbose — подробный лог процесса восстановления.
+--exit-on-error — остановиться на первой ошибке, а не продолжать.
+Почему нет --role
+
+Поскольку вы подключаетесь сразу как klkt25user, параметр
+
+--role=klkt25user
+
+ничего не добавляет. Он используется, когда подключение выполняется одним пользователем (например, postgres), а объекты нужно создавать от имени другой роли.
+
+Перед запуском я бы сделал две проверки
+
+Убедиться, что подключение работает:
+
+psql -h <DNS_или_IP_Patroni> -U klkt25user -d klkt25
+
+И внутри:
+
+SELECT current_database();
+SELECT current_user;
+SELECT pg_is_in_recovery();
+
+Должно получиться примерно:
+
+ current_database
+-----------------
+ klkt25
+
+ current_user
+-------------
+ klkt25user
+
+ pg_is_in_recovery
+------------------
+ f
+
+Последнее значение (f, то есть false) подтверждает, что вы подключились к Primary.
