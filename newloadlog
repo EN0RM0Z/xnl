@@ -1,3 +1,7 @@
+"subject": "=Уведомление: Новый паттерн (Экземпляр: {{ $json.keycloak_instance }})",
+        "text": "=Внимание: Зафиксирован новый паттерн для экземпляра Keycloak ({{ $json.keycloak_instance }}).\n\n📌 Сервер, на котором зафиксирован паттерн: {{ $json.server_name }}\n🕒 Время поступления: {{ $json.batch_times.split('; ')[0] }}\n\n📝 Текст паттерна:\n{{ $json.original_message }}",
+        "options": {}
+
 {
   "name": "Логи-4: Сбор и обработка данных (С уведомлениями на кластер v3)",
   "nodes": [
