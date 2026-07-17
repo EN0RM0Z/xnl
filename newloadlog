@@ -1,0 +1,275 @@
+{
+  "name": "Логи-4: Сбор и обработка данных (С уведомлениями на кластер v3)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-ingest",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "8c4541bb-ff32-43ed-8c61-630183248e57",
+      "name": "Webhook Ingest",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -1456,
+        -32
+      ],
+      "webhookId": "3433e50c-db1b-48ee-bd34-3e17498b0256",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "B7psjoK5FjczpCI6",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst aggregated = {}; \nconst LATENCY_THRESHOLD = 2.0;\n\nfor (const item of allItems) {\n    const payload = item.json.body || {};\n    const logBatch = Array.isArray(payload.message) ? payload.message : [payload.message || \"\"];\n    \n    for (const logItem of logBatch) {\n        const serverName = (typeof logItem === 'object' && logItem !== null) ? (logItem.hostname || \"UNKNOWN-SERVER\") : \"UNKNOWN-SERVER\";\n        const keycloakInstance = (typeof logItem === 'object' && logItem !== null) ? (logItem.keycloak_instance || \"UNKNOWN-INSTANCE\") : \"UNKNOWN-INSTANCE\";\n        const rawMessage = (typeof logItem === 'object' && logItem !== null) ? (logItem.message || \"\") : logItem;\n        \n        if (!rawMessage.trim()) continue;\n\n        let singleLineMessage = rawMessage.split(/\\r?\\n/)[0].trim();\n        if (!singleLineMessage) continue;\n\n        let logTimestamp = new Date().toISOString();\n        const dateMatch = singleLineMessage.match(/^(\\d{4}[-\\/]\\d{2}[-\\/]\\d{2}[ T]\\d{2}:\\d{2}:\\d{2})/);\n        if (dateMatch) logTimestamp = dateMatch[1].replace(' ', 'T').replace('/', '-');\n\n        let loglevel = \"INFO\";\n        const levelMatch = singleLineMessage.match(/^\\d{4}[-\\/]\\d{2}[-\\/]\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}\\S*\\s+([A-Z]+)\\b/i);\n        if (levelMatch) loglevel = levelMatch[1].toUpperCase();\n        if (loglevel === \"WARNING\") loglevel = \"WARN\";\n\n        let cleanMessage = singleLineMessage;\n        cleanMessage = cleanMessage.replace(/\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b/g, \"[IP_ADDRESS]\");\n        cleanMessage = cleanMessage.replace(/\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?Z?/g, \"[TIMESTAMP]\");\n        cleanMessage = cleanMessage.replace(/executor-thread-\\d+/gi, \"executor-thread-XXX\");\n        cleanMessage = cleanMessage.replace(/(?:user_|id=|session_|token_)\\w+/gi, \"[ID]\");\n        cleanMessage = cleanMessage.replace(/\\b[a-zA-Z0-9]+(?::[a-zA-Z0-9]+){3,}\\b/g, \"[TX_ID]\");\n        cleanMessage = cleanMessage.trim();\n\n        if (!cleanMessage) continue;\n\n        const groupKey = cleanMessage + \"_\" + keycloakInstance + \"_\" + serverName;\n\n        if (aggregated[groupKey]) {\n            aggregated[groupKey].batch_count += 1;\n            aggregated[groupKey].batch_times.push(logTimestamp);\n        } else {\n            aggregated[groupKey] = {\n                clean_message: cleanMessage,\n                loglevel,\n                server: serverName,\n                keycloak_instance: keycloakInstance,\n                batch_count: 1,\n                batch_times: [logTimestamp]\n            };\n        }\n    }\n}\n\nreturn Object.values(aggregated).map(item => {\n    const escaped = item.clean_message.replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n');\n    return {\n        json: {\n            clean_message: item.clean_message,\n            clean_message_escaped: escaped,\n            loglevel: item.loglevel,\n            server: item.server,\n            keycloak_instance: item.keycloak_instance,\n            batch_count: item.batch_count,\n            batch_times: item.batch_times.join('; ')\n        }\n    };\n});"
+      },
+      "id": "b765e18c-3666-4c76-854d-b11271eb2316",
+      "name": "Фильтрация и Группировка",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        -1232,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO public.log_patterns (cleanmessage, loglevel, last_seen) \nVALUES ('{{ $json.clean_message.split(\"'\").join(\"''\") }}', '{{ $json.loglevel }}', CURRENT_TIMESTAMP) \nON CONFLICT (cleanmessage) \nDO UPDATE SET last_seen = CURRENT_TIMESTAMP \nRETURNING \n  id, \n  answer, \n  cleanmessage AS original_message,\n  '{{ $json.clean_message_escaped.split(\"'\").join(\"''\") }}' AS clean_message_escaped, \n  '{{ $json.server }}' AS server_name, \n  '{{ $json.keycloak_instance }}' AS keycloak_instance,\n  '{{ $json.batch_times }}' AS batch_times;",
+        "options": {}
+      },
+      "id": "a666002d-0c4a-4d26-a850-969577a2e0b8",
+      "name": "UPSERT Паттерн",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1008,
+        -32
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "nIivxWlWNhuNxUzx",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH check_existing AS (\n  SELECT EXISTS (\n    SELECT 1 FROM public.log_events \n    WHERE pattern_id = {{ $json.id }} \n      AND keycloak_instance = '{{ $json.keycloak_instance }}'\n  ) as already_exists\n),\ninserted_events AS (\n  INSERT INTO public.log_events (pattern_id, event_time, server_name, keycloak_instance)\n  SELECT \n    {{ $json.id }},\n    CAST(NULLIF(ts, '') AS TIMESTAMP),\n    '{{ $json.server_name }}',\n    '{{ $json.keycloak_instance }}'\n  FROM unnest(string_to_array('{{ $json.batch_times }}', '; ')) AS ts\n  WHERE ts IS NOT NULL AND ts != ''\n  RETURNING id\n)\nSELECT \n  {{ $json.id }} AS id, \n  '{{ $json.answer ? $json.answer.split(\"'\").join(\"''\") : \"\" }}' AS answer, \n  '{{ $json.clean_message_escaped.split(\"'\").join(\"''\") }}' AS clean_message_escaped,\n  '{{ $json.original_message.split(\"'\").join(\"''\") }}' AS original_message,\n  '{{ $json.server_name }}' AS server_name,\n  '{{ $json.keycloak_instance }}' AS keycloak_instance,\n  '{{ $json.batch_times }}' AS batch_times,\n  (SELECT already_exists FROM check_existing) AS already_exists\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "f98eccf6-fd7f-4cf1-82d7-6cb56bd216e7",
+      "name": "INSERT События",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -784,
+        -32
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "nIivxWlWNhuNxUzx",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.answer }}",
+              "operation": "isEmpty"
+            }
+          ]
+        }
+      },
+      "id": "6518a544-71e5-4e7c-a0ec-d7c05bd10452",
+      "name": "Нужен ответ ИИ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -512,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.already_exists }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "96cbfb30-c3d3-462a-a921-2f741128c792",
+      "name": "Новый на кластере?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -512,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.1.35:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-oss:120b-cloud\",\n  \"prompt\": \"Ты — ведущий системный инженер и эксперт по сопровождению Keycloak. Тебе представлен лог Keyclaok версии 25.0.6 Твоя задача: Если в логе есть ошибка или предупреждение, дать КРАТКИЙ И ТОЧНЫЙ ответ: КАКОВЫ ПРИЧИНЫ, НАСКОЛЬКО КРИТИЧНА И КАК УСТРАНИТЬ. Если лог информационный сообщи ЧТО ЛОГ ИНФОРМАЦИОННЫЙ.\\n\\nСТРОГИЙ КОНТЕКСТ С РЕЛЕВАНТНЫМИ ЛОГОМ:\\n{{ $json.clean_message_escaped }} \\n\\n Используй Markdown для красивого оформления таблиц, списков и блоков кода. Из логов вырезаны такие данные как дата/время, идентификаторы, токены и тому подобные данные в целях безопасности: НЕ НУЖНО НА ЭТО ОБРАЩАТЬ ВНИМАНИЕ И УКАЗЫВАТЬ\",\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "id": "146fad23-6817-479f-8ac7-6ac8511ba69c",
+      "name": "Анализ ИИ (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        -288,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE public.log_patterns \nSET answer = '{{ $json.response.replace(/'/g, \"''\") }}' \nWHERE id = {{ $('Нужен ответ ИИ?').item.json.id }};",
+        "options": {}
+      },
+      "id": "2d68cb29-c990-4338-85bf-5e08f5c50428",
+      "name": "Сохранить Ответ ИИ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -64,
+        -176
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "nIivxWlWNhuNxUzx",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "alerts@yourdomain.com",
+        "toEmail": "admin@yourdomain.com",
+        "subject": "=Новый паттерн в кластере! Экземпляр: {{ $json.keycloak_instance }}",
+        "text": "=Паттерн зарегистрирован в кластере (экземпляре) Keycloak впервые или после очистки истории.\n\nДЕТАЛИ РЕГИСТРАЦИИ:\n• Экземпляр Keycloak: {{ $json.keycloak_instance }}\n• Сервер первичной фиксации: {{ $json.server_name }}\n• Время события: {{ $json.batch_times.split('; ')[0] }}\n\nТЕКСТ ПАТТЕРНА:\n{{ $json.original_message }}",
+        "options": {}
+      },
+      "id": "83cbfb30-c3d3-462a-a921-2f741128c792",
+      "name": "Уведомление (Email)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -288,
+        64
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Ingest": {
+      "main": [
+        [
+          {
+            "node": "Фильтрация и Группировка",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Фильтрация и Группировка": {
+      "main": [
+        [
+          {
+            "node": "UPSERT Паттерн",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UPSERT Паттерн": {
+      "main": [
+        [
+          {
+            "node": "INSERT События",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT События": {
+      "main": [
+        [
+          {
+            "node": "Нужен ответ ИИ?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Новый на кластере?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Нужен ответ ИИ?": {
+      "main": [
+        [
+          {
+            "node": "Анализ ИИ (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Анализ ИИ (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Сохранить Ответ ИИ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Новый на кластере?": {
+      "main": [
+        [
+          {
+            "node": "Уведомление (Email)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "aa8f055b-3ec0-407f-8a47-be955afffbd3",
+  "meta": {
+    "instanceId": "97f1ed73e68db03755086e9ea601cfc8f3efdefd9ffb8bd617070fb96ea5f52e"
+  },
+  "id": "taVCZXroaleBrXhg",
+  "tags": []
+}
