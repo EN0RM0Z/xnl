@@ -1,17 +1,117 @@
-{
-  "parameters": {
-    "fromEmail": "alerts@yourdomain.com",
-    "toEmail": "admin@yourdomain.com",
-    "subject": "=🚨 AI Log Observer: Новый паттерн ({{ $json.keycloak_instance }})",
-    "html": "=<!DOCTYPE html><html><body style=\"margin:0;padding:20px;background:#0f172a;font-family:Segoe UI,Arial,sans-serif;\">\n<table width=\"100%\" bgcolor=\"#0f172a\" cellpadding=\"0\" cellspacing=\"0\"><tr><td align=\"center\">\n<table width=\"820\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"#1e293b\" style=\"border:1px solid #334155;\">\n<tr><td bgcolor=\"#1e293b\" style=\"padding:26px;border-bottom:1px solid #334155;\">\n<div style=\"font:700 30px Segoe UI,Arial;color:#38bdf8;\">🚨 AI Log Observer</div>\n<div style=\"font:14px Segoe UI;color:#94a3b8;margin-top:6px;\">Зафиксирован новый тип инцидента</div></td></tr>\n<tr><td style=\"padding:18px;\">\n<table width=\"100%\" cellpadding=\"8\" cellspacing=\"0\" style=\"border:1px solid #334155;\">\n<tr><td bgcolor=\"#0d121f\" width=\"35%\" style=\"border:1px solid #334155;color:#7dd3fc;font:bold 13px Segoe UI;\">📦 Экземпляр</td><td bgcolor=\"#141b2d\" style=\"border:1px solid #334155;color:#e2e8f0;font:13px Consolas;\">{{ $json.keycloak_instance }}</td></tr>\n<tr><td bgcolor=\"#0d121f\" style=\"border:1px solid #334155;color:#7dd3fc;font:bold 13px Segoe UI;\">🖥 Сервер</td><td bgcolor=\"#141b2d\" style=\"border:1px solid #334155;color:#e2e8f0;font:13px Consolas;\">{{ $json.server_name }}</td></tr>\n<tr><td bgcolor=\"#0d121f\" style=\"border:1px solid #334155;color:#7dd3fc;font:bold 13px Segoe UI;\">🕒 Первое поступление</td><td bgcolor=\"#141b2d\" style=\"border:1px solid #334155;color:#fbbf24;font:bold 13px Consolas;\">{{ $json.batch_times.split('; ')[0] }}</td></tr>\n</table></td></tr>\n<tr><td style=\"padding:0 18px 18px 18px;\"><div style=\"color:#7dd3fc;font:700 20px Segoe UI;border-bottom:2px solid #38bdf8;padding:8px 0 10px;\">Сырой текст лог-паттерна</div>\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border:1px solid #334155;margin-top:14px;\"><tr><td bgcolor=\"#0f172a\" style=\"padding:18px;border-left:4px solid #38bdf8;color:#f1f5f9;font:13px Consolas;line-height:20px;\">{{ $json.original_message.split('\\n').join('<br>').split('\\\\\\\\n').join('<br>') }}</td></tr></table>\n</td></tr>\n<tr><td bgcolor=\"#141b2d\" style=\"padding:16px;border-top:1px solid #334155;text-align:center;color:#94a3b8;font:12px Segoe UI;\">AI Log Observer</td></tr>\n</table></td></tr></table></body></html>",
-    "options": {}
-  },
-  "id": "83cbfb30-c3d3-462a-a921-2f741128c792",
-  "name": "Уведомление (Email)",
-  "type": "n8n-nodes-base.emailSend",
-  "typeVersion": 2.1,
-  "position": [
-    -288,
-    64
-  ]
+={{ $json.html_report }}
+
+
+// ===================== НАЧАЛО КОДА =====================
+const item = $input.first().json;
+
+// ---------- Вспомогательные функции (из Format Final Report) ----------
+function escapeHTML(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
+
+// ---------- Извлечение данных ----------
+const instance = escapeHTML(item.keycloak_instance || 'UNKNOWN');
+const server   = escapeHTML(item.server_name || 'UNKNOWN');
+const batch    = escapeHTML(item.batch_times || 'Нет данных');
+const rawMsg   = escapeHTML(item.original_message || '');
+
+// Первое время из batch_times (разделитель "; ")
+const firstTime = batch.split('; ')[0] || batch;
+
+// Преобразуем переносы строк в <br> для корректного отображения в email
+const formattedMessage = rawMsg
+  .replace(/\\n/g, '<br>')
+  .replace(/\\\\n/g, '<br>')
+  .replace(/\n/g, '<br>'); // на случай, если уже есть символы перевода строки
+
+// ---------- Генерация HTML-письма в стиле дашборда ----------
+const htmlReport = `
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<title>AI Log Observer: Новый паттерн</title>
+</head>
+<body style="margin:0; padding:0; background-color:#0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#0f172a; padding:30px 0;">
+<tr><td align="center">
+<table border="0" cellpadding="0" cellspacing="0" width="620" style="background-color:#1e293b; border:1px solid #334155; border-top:4px solid #38bdf8;">
+  
+  <!-- Заголовок -->
+  <tr><td style="background-color:#0f172a; padding:20px 24px; border-bottom:1px solid #334155;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#38bdf8;">AI Log Observer</td></tr>
+      <tr><td style="font-size:18px; font-weight:700; color:#e2e8f0; padding-top:4px;">Зафиксирован новый тип инцидента</td></tr>
+    </table>
+  </td></tr>
+
+  <!-- Тело -->
+  <tr><td style="padding:24px;">
+    <!-- Блок с экземпляром и сервером -->
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr>
+        <td width="48%" valign="top" style="background-color:#0f172a; border:1px solid #334155; padding:14px;">
+          <table border="0" cellpadding="0" cellspacing="0" width="100%">
+            <tr><td style="font-size:10px; text-transform:uppercase; color:#94a3b8; font-weight:700; letter-spacing:0.05em;">Экземпляр Keycloak</td></tr>
+            <tr><td style="font-size:14px; color:#38bdf8; font-weight:700; padding-top:6px;">${instance}</td></tr>
+          </table>
+        </td>
+        <td width="4%">&nbsp;</td>
+        <td width="48%" valign="top" style="background-color:#0f172a; border:1px solid #334155; padding:14px;">
+          <table border="0" cellpadding="0" cellspacing="0" width="100%">
+            <tr><td style="font-size:10px; text-transform:uppercase; color:#94a3b8; font-weight:700; letter-spacing:0.05em;">Сервер фиксации</td></tr>
+            <tr><td style="font-size:14px; color:#38bdf8; font-weight:700; padding-top:6px;">${server}</td></tr>
+          </table>
+        </td>
+      </tr>
+      <tr><td colspan="3" height="12" style="font-size:12px; line-height:12px;">&nbsp;</td></tr>
+      <!-- Время первого поступления -->
+      <tr><td colspan="3" valign="top" style="background-color:#0f172a; border:1px solid #334155; padding:14px;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr><td style="font-size:10px; text-transform:uppercase; color:#94a3b8; font-weight:700; letter-spacing:0.05em;">Время первого поступления</td></tr>
+          <tr><td style="font-size:13px; color:#e2e8f0; font-weight:600; padding-top:6px;">${firstTime}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+
+    <!-- Сырой лог -->
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td height="24" style="font-size:24px; line-height:24px;">&nbsp;</td></tr>
+      <tr><td style="font-size:12px; font-weight:700; color:#cbd5e1; text-transform:uppercase; letter-spacing:0.05em; padding-bottom:8px;">Сырой текст лог-паттерна:</td></tr>
+    </table>
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr><td style="background-color:#0f172a; border:1px solid #334155; border-left:4px solid #f87171; padding:16px;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr><td style="font-family: Consolas, Monaco, monospace; font-size:13px; color:#f1f5f9; line-height:1.6; word-break:break-all;">${formattedMessage}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <!-- Подвал -->
+  <tr><td style="background-color:#0f172a; border-top:1px solid #334155; padding:16px; text-align:center; font-size:11px; color:#94a3b8;">Сообщение сформировано автоматически платформой AI Log Observer.</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>
+`;
+
+// ---------- Возвращаем результат ----------
+return [{
+  json: {
+    html_report: htmlReport,
+    // пробрасываем остальные поля, чтобы они были доступны в следующих нодах
+    ...item
+  }
+}];
+// ===================== КОНЕЦ КОДА =====================
+
+
+
