@@ -1,0 +1,88 @@
+Часть 1. Проверка (без изменений в системе)
+1. Проверяем установленную версию
+dnf list installed nginx
+
+Ожидаем
+
+nginx-1.14.1...
+2. Проверяем, что пакет 1.31.3 существует именно в корпоративном репозитории
+dnf repoquery --repoid=nginx --location nginx-1:1.31.3-1.el8.ngx
+
+Если выводится URL на RPM-файл, например
+
+https://serv01repo/.../nginx-1.31.3-1.el8.ngx.x86_64.rpm
+
+значит пакет действительно опубликован.
+
+3. Проверяем наличие модулей именно версии 1.31.3
+dnf repoquery --repoid=nginx --location nginx-module-image-filter-1:1.31.3-1.el8.ngx
+dnf repoquery --repoid=nginx --location nginx-module-perl-1:1.31.3-1.el8.ngx
+dnf repoquery --repoid=nginx --location nginx-module-xslt-1:1.31.3-1.el8.ngx
+
+Если stream и mail публикуются отдельными пакетами — проверить аналогично.
+
+4. Самая главная проверка
+
+Имитация установки.
+
+dnf install --assumeno \
+    nginx-1:1.31.3-1.el8.ngx \
+    nginx-module-image-filter-1:1.31.3-1.el8.ngx \
+    nginx-module-perl-1:1.31.3-1.el8.ngx \
+    nginx-module-xslt-1:1.31.3-1.el8.ngx
+
+Если DNF строит транзакцию и предлагает установить именно эти пакеты, значит после удаления старого nginx установка возможна.
+
+Именно эта проверка теперь является главным критерием готовности, а не dnf list.
+
+Часть 2. Удаление старого nginx
+
+Сначала резервная копия.
+
+mkdir -p /root/nginx_backup
+
+cp -a /etc/nginx /root/nginx_backup/
+
+Посмотреть установленные пакеты
+
+rpm -qa | grep nginx
+
+Удалить полностью старый стек
+
+dnf remove "nginx*"
+
+После этого проверить
+
+rpm -qa | grep nginx
+
+Вывод должен быть пустым.
+
+Часть 3. Установка нового nginx
+
+Установка
+
+dnf install \
+    nginx-1:1.31.3-1.el8.ngx \
+    nginx-module-image-filter-1:1.31.3-1.el8.ngx \
+    nginx-module-perl-1:1.31.3-1.el8.ngx \
+    nginx-module-xslt-1:1.31.3-1.el8.ngx
+
+После установки проверить
+
+nginx -V
+rpm -qa | grep nginx
+nginx -t
+systemctl restart nginx
+systemctl status nginx
+Я бы добавил еще одну защитную проверку
+
+Поскольку корпоративный репозиторий ведет себя нестандартно, перед выполнением dnf remove "nginx*" я бы выполнил еще:
+
+dnf install --downloadonly \
+    --destdir=/tmp/nginx-test \
+    nginx-1:1.31.3-1.el8.ngx \
+    nginx-module-image-filter-1:1.31.3-1.el8.ngx \
+    nginx-module-perl-1:1.31.3-1.el8.ngx \
+    nginx-module-xslt-1:1.31.3-1.el8.ngx
+
+Эта команда ничего не устанавливает, а только скачивает RPM-файлы в /tmp/nginx-test. Если все пакеты успешно загрузятся, это будет окончательным подтверждением того, что после удаления старого nginx установка нового пройдет без сюрпризов. Это наиболее безопасный способ проверить готовность репозитория перед изменением работающего сервера.
