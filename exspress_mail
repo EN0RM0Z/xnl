@@ -1,0 +1,464 @@
+#!/bin/bash
+
+# ============================================================
+# Мониторинг доступности Keycloak
+#
+# Oracle Linux 8
+#
+# Запуск через cron каждые 5 минут:
+#
+# */5 * * * * /opt/keycloak/scripts/check_keycloak.sh
+# ============================================================
+
+
+# ============================================================
+# НАСТРОЙКИ ПРОВЕРКИ
+# ============================================================
+
+# Проверяемый URL
+URL="https://keycloak.test.ru"
+
+# Количество проверок за один цикл
+CHECK_ATTEMPTS=30
+
+# Пауза между проверками, секунд
+CHECK_DELAY=1
+
+# Минимальное количество успешных HTTP 200
+# для признания сайта доступным
+MIN_SUCCESS=25
+
+# Через сколько минут отправлять повторное уведомление,
+# если сайт продолжает быть недоступен
+NOTIFY_INTERVAL=30
+
+# Таймаут установки соединения
+CONNECT_TIMEOUT=5
+
+# Максимальное время одного запроса
+MAX_TIME=10
+
+
+# ============================================================
+# ФАЙЛЫ
+# ============================================================
+
+LOGFILE="/opt/keycloak/scripts/log_kk.txt"
+
+# Файл состояния между запусками
+STATEFILE="/opt/keycloak/scripts/site_monitor.state"
+
+# Файл блокировки от параллельного запуска
+LOCKFILE="/opt/keycloak/scripts/site_monitor.lock"
+
+
+# ============================================================
+# НАСТРОЙКИ МЕССЕНДЖЕРА
+# ============================================================
+
+NOTIFY_URL="https://send.test.ru/message"
+
+SEVERITY="info"
+SENDER="ALERT_SENDER"
+CHAT_ID="123-123456478"
+BOT_TOKEN="123456.fgjhgjhgjhgjhgjhgjh"
+
+
+# ============================================================
+# НАСТРОЙКИ ПОЧТЫ
+# ============================================================
+
+SMTP_SERVER="smtp.test.ru"
+
+MAIL_FROM="alert@test.ru"
+
+MAIL_TO="адреса@получате.ля"
+
+# Тема сообщений
+MAIL_SUBJECT_DOWN="ALERT: Keycloak недоступен"
+MAIL_SUBJECT_UP="OK: Keycloak восстановлен"
+
+
+# ============================================================
+# ФУНКЦИЯ ОТПРАВКИ В МЕССЕНДЖЕР
+#
+# Возвращает:
+#   0 - успешно
+#   1 - ошибка
+# ============================================================
+
+send_messenger()
+{
+    local MESSAGE="$1"
+
+    DATA=$(jq -n \
+        --arg severity "$SEVERITY" \
+        --arg sender "$SENDER" \
+        --arg chat_id "$CHAT_ID" \
+        --arg bot_token "$BOT_TOKEN" \
+        --arg text "$MESSAGE" \
+        '{
+            severity: $severity,
+            sender: $sender,
+            chat_id: $chat_id,
+            bot_token: $bot_token,
+            text: $text
+        }'
+    )
+
+    HTTP_CODE=$(curl \
+        --silent \
+        --show-error \
+        --output /dev/null \
+        --write-out "%{http_code}" \
+        --request POST \
+        --header "accept: */*" \
+        --header "Content-Type: application/json" \
+        --data "$DATA" \
+        --connect-timeout 5 \
+        --max-time 10 \
+        "$NOTIFY_URL" \
+        2>/dev/null
+    )
+
+    CURL_EXIT=$?
+
+    if [[ "$CURL_EXIT" -eq 0 ]] && \
+       [[ "$HTTP_CODE" -ge 200 ]] && \
+       [[ "$HTTP_CODE" -lt 300 ]]; then
+
+        return 0
+
+    else
+
+        return 1
+
+    fi
+}
+
+
+# ============================================================
+# ФУНКЦИЯ ОТПРАВКИ ПОЧТЫ
+#
+# Используется mailx:
+#
+# echo "текст" | mailx \
+#   -s "тема" \
+#   -S smtp="smtp.test.ru" \
+#   -S from="alert@test.ru" \
+#   "получатель@test.ru"
+#
+# Возвращает:
+#   0 - mailx успешно завершился
+#   1 - ошибка
+# ============================================================
+
+send_mail()
+{
+    local MESSAGE="$1"
+    local SUBJECT="$2"
+
+    echo "$MESSAGE" | mailx \
+        -s "$SUBJECT" \
+        -S smtp="$SMTP_SERVER" \
+        -S from="$MAIL_FROM" \
+        "$MAIL_TO"
+
+    if [[ "$?" -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+
+# ============================================================
+# ЗАЩИТА ОТ ПАРАЛЛЕЛЬНОГО ЗАПУСКА
+# ============================================================
+
+exec 200>"$LOCKFILE"
+
+if ! flock -n 200; then
+    exit 0
+fi
+
+
+# ============================================================
+# ЧТЕНИЕ ПРЕДЫДУЩЕГО СОСТОЯНИЯ
+# ============================================================
+
+SITE_STATE="UP"
+LAST_NOTIFICATION=0
+
+if [[ -f "$STATEFILE" ]]; then
+    source "$STATEFILE"
+fi
+
+
+# ============================================================
+# ПРОВЕРКА САЙТА
+# ============================================================
+
+SUCCESS_COUNT=0
+LAST_STATUS="000"
+
+for ((i=1; i<=CHECK_ATTEMPTS; i++))
+do
+
+    STATUS=$(curl \
+        --head \
+        --insecure \
+        --location \
+        --connect-timeout "$CONNECT_TIMEOUT" \
+        --max-time "$MAX_TIME" \
+        --write-out "%{http_code}" \
+        --silent \
+        --output /dev/null \
+        "$URL" \
+        2>/dev/null
+    )
+
+    CURL_EXIT=$?
+
+    if [[ "$CURL_EXIT" -ne 0 ]]; then
+        STATUS="000"
+    fi
+
+    LAST_STATUS="$STATUS"
+
+    # Успешным считаем ТОЛЬКО HTTP 200
+    if [[ "$STATUS" == "200" ]]; then
+        ((SUCCESS_COUNT++))
+    fi
+
+    if [[ "$i" -lt "$CHECK_ATTEMPTS" ]]; then
+        sleep "$CHECK_DELAY"
+    fi
+
+done
+
+
+# ============================================================
+# ОПРЕДЕЛЯЕМ ДОСТУПНОСТЬ
+# ============================================================
+
+if [[ "$SUCCESS_COUNT" -ge "$MIN_SUCCESS" ]]; then
+    SITE_AVAILABLE=1
+else
+    SITE_AVAILABLE=0
+fi
+
+
+# ============================================================
+# ТЕКУЩЕЕ ВРЕМЯ
+# ============================================================
+
+NOW=$(date +%s)
+
+LOG_DATE=$(date +"%Y-%m-%d %T")
+
+LOG_MESSAGE="${LOG_DATE} Успешных: ${SUCCESS_COUNT} из ${CHECK_ATTEMPTS}"
+
+
+# ============================================================
+# САЙТ ДОСТУПЕН
+# ============================================================
+
+if [[ "$SITE_AVAILABLE" -eq 1 ]]; then
+
+    # --------------------------------------------------------
+    # ЕСЛИ ДО ЭТОГО БЫЛ DOWN — ВОССТАНОВЛЕНИЕ
+    # --------------------------------------------------------
+
+    if [[ "$SITE_STATE" == "DOWN" ]]; then
+
+        MESSAGE="Keycloak восстановлен. Сайт снова доступен: ${URL}. Успешных проверок: ${SUCCESS_COUNT}/${CHECK_ATTEMPTS}"
+
+        # Отправка в мессенджер
+        if send_messenger "$MESSAGE"; then
+            MESSENGER_OK=1
+        else
+            MESSENGER_OK=0
+        fi
+
+        # Отправка на почту
+        if send_mail "$MESSAGE" "$MAIL_SUBJECT_UP"; then
+            MAIL_OK=1
+        else
+            MAIL_OK=0
+        fi
+
+
+        # ----------------------------------------------------
+        # Результат отправки
+        # ----------------------------------------------------
+
+        if [[ "$MESSENGER_OK" -eq 1 ]] && [[ "$MAIL_OK" -eq 1 ]]; then
+
+            LOG_MESSAGE="${LOG_MESSAGE}, САЙТ ВОССТАНОВЛЕН: УВЕДОМЛЕНИЯ ОТПРАВЛЕНЫ"
+
+        elif [[ "$MESSENGER_OK" -eq 1 ]] && [[ "$MAIL_OK" -eq 0 ]]; then
+
+            LOG_MESSAGE="${LOG_MESSAGE}, САЙТ ВОССТАНОВЛЕН: МЕССЕНДЖЕР ОТПРАВЛЕН, ПОЧТА НЕ ОТПРАВЛЕНА"
+
+        elif [[ "$MESSENGER_OK" -eq 0 ]] && [[ "$MAIL_OK" -eq 1 ]]; then
+
+            LOG_MESSAGE="${LOG_MESSAGE}, САЙТ ВОССТАНОВЛЕН: МЕССЕНДЖЕР НЕ ОТПРАВЛЕН, ПОЧТА ОТПРАВЛЕНА"
+
+        else
+
+            LOG_MESSAGE="${LOG_MESSAGE}, САЙТ ВОССТАНОВЛЕН: СБОЙ ОТПРАВКИ УВЕДОМЛЕНИЙ"
+
+        fi
+
+    fi
+
+
+    # Состояние UP
+    SITE_STATE="UP"
+
+    # Сбрасываем таймер повторных уведомлений
+    LAST_NOTIFICATION=0
+
+
+# ============================================================
+# САЙТ НЕДОСТУПЕН
+# ============================================================
+
+else
+
+    # --------------------------------------------------------
+    # ПЕРВОЕ ОБНАРУЖЕНИЕ НЕДОСТУПНОСТИ
+    # --------------------------------------------------------
+
+    if [[ "$SITE_STATE" != "DOWN" ]]; then
+
+        MESSAGE="Keycloak недоступен! URL: ${URL}. Успешных проверок HTTP 200: ${SUCCESS_COUNT}/${CHECK_ATTEMPTS}. Последний HTTP-код: ${LAST_STATUS}"
+
+        # Отправка в мессенджер
+        if send_messenger "$MESSAGE"; then
+            MESSENGER_OK=1
+        else
+            MESSENGER_OK=0
+        fi
+
+        # Отправка на почту
+        if send_mail "$MESSAGE" "$MAIL_SUBJECT_DOWN"; then
+            MAIL_OK=1
+        else
+            MAIL_OK=0
+        fi
+
+
+        # ----------------------------------------------------
+        # Результат отправки
+        # ----------------------------------------------------
+
+        if [[ "$MESSENGER_OK" -eq 1 ]] && [[ "$MAIL_OK" -eq 1 ]]; then
+
+            LOG_MESSAGE="${LOG_MESSAGE}, САЙТ НЕ ДОСТУПЕН: УВЕДОМЛЕНИЯ ОТПРАВЛЕНЫ"
+
+        elif [[ "$MESSENGER_OK" -eq 1 ]] && [[ "$MAIL_OK" -eq 0 ]]; then
+
+            LOG_MESSAGE="${LOG_MESSAGE}, САЙТ НЕ ДОСТУПЕН: МЕССЕНДЖЕР ОТПРАВЛЕН, ПОЧТА НЕ ОТПРАВЛЕНА"
+
+        elif [[ "$MESSENGER_OK" -eq 0 ]] && [[ "$MAIL_OK" -eq 1 ]]; then
+
+            LOG_MESSAGE="${LOG_MESSAGE}, САЙТ НЕ ДОСТУПЕН: МЕССЕНДЖЕР НЕ ОТПРАВЛЕН, ПОЧТА ОТПРАВЛЕНА"
+
+        else
+
+            LOG_MESSAGE="${LOG_MESSAGE}, САЙТ НЕ ДОСТУПЕН: СБОЙ ОТПРАВКИ УВЕДОМЛЕНИЙ"
+
+        fi
+
+
+        # Фиксируем состояние DOWN
+        SITE_STATE="DOWN"
+
+        # Сохраняем время отправки/попытки уведомления
+        LAST_NOTIFICATION="$NOW"
+
+
+    # --------------------------------------------------------
+    # САЙТ УЖЕ БЫЛ НЕДОСТУПЕН
+    # --------------------------------------------------------
+
+    else
+
+        INTERVAL_SECONDS=$((NOTIFY_INTERVAL * 60))
+        ELAPSED=$((NOW - LAST_NOTIFICATION))
+
+
+        # ----------------------------------------------------
+        # Прошло 30 минут — повторное уведомление
+        # ----------------------------------------------------
+
+        if [[ "$ELAPSED" -ge "$INTERVAL_SECONDS" ]]; then
+
+            MESSAGE="Keycloak всё ещё недоступен! URL: ${URL}. Успешных проверок HTTP 200: ${SUCCESS_COUNT}/${CHECK_ATTEMPTS}. Последний HTTP-код: ${LAST_STATUS}. Повторное уведомление."
+
+            # Отправка в мессенджер
+            if send_messenger "$MESSAGE"; then
+                MESSENGER_OK=1
+            else
+                MESSENGER_OK=0
+            fi
+
+            # Отправка на почту
+            if send_mail "$MESSAGE" "$MAIL_SUBJECT_DOWN"; then
+                MAIL_OK=1
+            else
+                MAIL_OK=0
+            fi
+
+
+            # ------------------------------------------------
+            # Результат отправки
+            # ------------------------------------------------
+
+            if [[ "$MESSENGER_OK" -eq 1 ]] && [[ "$MAIL_OK" -eq 1 ]]; then
+
+                LOG_MESSAGE="${LOG_MESSAGE}, САЙТ НЕ ДОСТУПЕН: УВЕДОМЛЕНИЯ ОТПРАВЛЕНЫ"
+
+            elif [[ "$MESSENGER_OK" -eq 1 ]] && [[ "$MAIL_OK" -eq 0 ]]; then
+
+                LOG_MESSAGE="${LOG_MESSAGE}, САЙТ НЕ ДОСТУПЕН: МЕССЕНДЖЕР ОТПРАВЛЕН, ПОЧТА НЕ ОТПРАВЛЕНА"
+
+            elif [[ "$MESSENGER_OK" -eq 0 ]] && [[ "$MAIL_OK" -eq 1 ]]; then
+
+                LOG_MESSAGE="${LOG_MESSAGE}, САЙТ НЕ ДОСТУПЕН: МЕССЕНДЖЕР НЕ ОТПРАВЛЕН, ПОЧТА ОТПРАВЛЕНА"
+
+            else
+
+                LOG_MESSAGE="${LOG_MESSAGE}, САЙТ НЕ ДОСТУПЕН: СБОЙ ОТПРАВКИ УВЕДОМЛЕНИЙ"
+
+            fi
+
+            # Обновляем время последнего уведомления
+            LAST_NOTIFICATION="$NOW"
+
+        fi
+
+    fi
+
+fi
+
+
+# ============================================================
+# СОХРАНЯЕМ СОСТОЯНИЕ
+# ============================================================
+
+cat > "$STATEFILE" <<EOF
+SITE_STATE="$SITE_STATE"
+LAST_NOTIFICATION=$LAST_NOTIFICATION
+EOF
+
+
+# ============================================================
+# ОДНА СТРОКА В ЛОГ
+# ============================================================
+
+echo "$LOG_MESSAGE" >> "$LOGFILE"
+
+exit 0
