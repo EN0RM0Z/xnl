@@ -1,0 +1,347 @@
+01_prepare_test_db.sh
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/config.sh"
+
+echo "=========================================="
+echo " Patroni HA test - prepare database"
+echo "=========================================="
+echo
+
+echo "Проверка подключения к ${DB_HOST}:${DB_PRIMARY_PORT}..."
+
+psql \
+    "host=${DB_HOST} port=${DB_PRIMARY_PORT} dbname=${DB_NAME} user=${DB_USER} connect_timeout=${CONNECT_TIMEOUT}" \
+    -X \
+    -v ON_ERROR_STOP=1 \
+    -c "SELECT
+            inet_server_addr() AS server,
+            inet_server_port() AS port,
+            CASE
+                WHEN pg_is_in_recovery()
+                THEN 'REPLICA'
+                ELSE 'PRIMARY'
+            END AS role;"
+
+if [ $? -ne 0 ]; then
+    echo
+    echo "ОШИБКА: невозможно подключиться к PostgreSQL через port ${DB_PRIMARY_PORT}"
+    exit 1
+fi
+
+echo
+echo "Создание таблицы ${TEST_TABLE}..."
+
+psql \
+    "host=${DB_HOST} port=${DB_PRIMARY_PORT} dbname=${DB_NAME} user=${DB_USER} connect_timeout=${CONNECT_TIMEOUT}" \
+    -X \
+    -v ON_ERROR_STOP=1 \
+    <<EOF
+
+CREATE TABLE IF NOT EXISTS ${TEST_TABLE} (
+    id          BIGINT PRIMARY KEY,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    test_value  TEXT NOT NULL
+);
+
+TRUNCATE TABLE ${TEST_TABLE};
+
+EOF
+
+if [ $? -ne 0 ]; then
+    echo
+    echo "ОШИБКА при создании/очистке таблицы."
+    exit 1
+fi
+
+echo
+echo "Таблица ${TEST_TABLE} готова."
+echo "Старые тестовые данные удалены."
+echo
+echo "Подготовка завершена успешно."
+============
+02_db_rw_test.sh
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/config.sh"
+
+mkdir -p "$LOG_DIR"
+
+echo "=========================================="
+echo " Patroni HA test - READ/WRITE"
+echo "=========================================="
+echo "Host       : $DB_HOST"
+echo "Port       : $DB_PRIMARY_PORT"
+echo "Database   : $DB_NAME"
+echo "Table      : $TEST_TABLE"
+echo "Interval   : ${RW_INTERVAL}s"
+echo "Log        : $RW_LOG"
+echo
+echo "Для остановки нажмите Ctrl+C"
+echo "=========================================="
+echo
+
+while true
+do
+    TEST_ID=$(date +%s%N)
+    TEST_VALUE="TEST_${TEST_ID}"
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S.%3N')
+
+    # --------------------------------------
+    # INSERT
+    # --------------------------------------
+
+    START=$(date +%s%3N)
+
+    INSERT_ERROR=$(mktemp)
+
+    psql \
+        "host=${DB_HOST} port=${DB_PRIMARY_PORT} dbname=${DB_NAME} user=${DB_USER} connect_timeout=${CONNECT_TIMEOUT}" \
+        -X \
+        -q \
+        -v ON_ERROR_STOP=1 \
+        -c "
+            INSERT INTO ${TEST_TABLE}(id, test_value)
+            VALUES (${TEST_ID}, '${TEST_VALUE}');
+        " \
+        > /dev/null 2>"$INSERT_ERROR"
+
+    INSERT_RC=$?
+
+    END=$(date +%s%3N)
+    INSERT_TIME=$((END - START))
+
+    INSERT_ERROR_TEXT=$(tr '\n' ' ' < "$INSERT_ERROR")
+    rm -f "$INSERT_ERROR"
+
+
+    # --------------------------------------
+    # Если INSERT успешен — SELECT
+    # --------------------------------------
+
+    if [ "$INSERT_RC" -eq 0 ]; then
+
+        START=$(date +%s%3N)
+
+        SELECT_RESULT=$(psql \
+            "host=${DB_HOST} port=${DB_PRIMARY_PORT} dbname=${DB_NAME} user=${DB_USER} connect_timeout=${CONNECT_TIMEOUT}" \
+            -X \
+            -A \
+            -t \
+            -q \
+            -v ON_ERROR_STOP=1 \
+            -c "
+                SELECT
+                    id || '|' ||
+                    test_value || '|' ||
+                    inet_server_addr() || '|' ||
+                    CASE
+                        WHEN pg_is_in_recovery()
+                        THEN 'REPLICA'
+                        ELSE 'PRIMARY'
+                    END
+                FROM ${TEST_TABLE}
+                WHERE id=${TEST_ID};
+            " 2>&1)
+
+        SELECT_RC=$?
+
+        END=$(date +%s%3N)
+        SELECT_TIME=$((END - START))
+
+        SELECT_RESULT=$(echo "$SELECT_RESULT" | xargs)
+
+        EXPECTED="${TEST_ID}|${TEST_VALUE}|"
+
+        if [ "$SELECT_RC" -eq 0 ] &&
+           echo "$SELECT_RESULT" | grep -q "^${EXPECTED}"
+        then
+            SELECT_STATUS="OK"
+        else
+            SELECT_STATUS="FAIL"
+        fi
+
+    else
+
+        SELECT_STATUS="SKIP"
+        SELECT_TIME=0
+        SELECT_RESULT="-"
+
+    fi
+
+
+    # --------------------------------------
+    # Общий результат
+    # --------------------------------------
+
+    if [ "$INSERT_RC" -eq 0 ] && [ "$SELECT_STATUS" = "OK" ]; then
+        STATUS="OK"
+    else
+        STATUS="FAIL"
+    fi
+
+
+    # --------------------------------------
+    # Лог
+    # --------------------------------------
+
+    echo "${TIMESTAMP} | STATUS=${STATUS} | ID=${TEST_ID} | INSERT=${INSERT_RC}(${INSERT_TIME}ms) | SELECT=${SELECT_STATUS}(${SELECT_TIME}ms) | RESULT=${SELECT_RESULT} | ERROR=${INSERT_ERROR_TEXT}" \
+        >> "$RW_LOG"
+
+
+    # --------------------------------------
+    # Вывод на экран
+    # --------------------------------------
+
+    if [ "$STATUS" = "OK" ]; then
+
+        SERVER=$(echo "$SELECT_RESULT" | awk -F'|' '{print $3}')
+        ROLE=$(echo "$SELECT_RESULT" | awk -F'|' '{print $4}')
+
+        echo "${TIMESTAMP} | OK | DB=${SERVER} | ${ROLE} | ${INSERT_TIME}ms/${SELECT_TIME}ms"
+
+    else
+
+        echo "${TIMESTAMP} | FAIL | INSERT=${INSERT_RC} | SELECT=${SELECT_STATUS} | ${INSERT_ERROR_TEXT}"
+
+    fi
+
+    sleep "$RW_INTERVAL"
+
+done
+===========
+03_db_replica_test.sh
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/config.sh"
+
+mkdir -p "$LOG_DIR"
+
+echo "=========================================="
+echo " Patroni HA test - REPLICA"
+echo "=========================================="
+echo "Host       : $DB_HOST"
+echo "Port       : $DB_REPLICA_PORT"
+echo "Database   : $DB_NAME"
+echo "Interval   : ${REPLICA_INTERVAL}s"
+echo "Log        : $REPLICA_LOG"
+echo
+echo "Для остановки нажмите Ctrl+C"
+echo "=========================================="
+echo
+
+while true
+do
+
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S.%3N')
+
+    START=$(date +%s%3N)
+
+    RESULT=$(psql \
+        "host=${DB_HOST} port=${DB_REPLICA_PORT} dbname=${DB_NAME} user=${DB_USER} connect_timeout=${CONNECT_TIMEOUT}" \
+        -X \
+        -A \
+        -t \
+        -q \
+        -v ON_ERROR_STOP=1 \
+        -c "
+            SELECT
+                inet_server_addr() || '|' ||
+                inet_server_port() || '|' ||
+                CASE
+                    WHEN pg_is_in_recovery()
+                    THEN 'REPLICA'
+                    ELSE 'PRIMARY'
+                END;
+        " 2>&1)
+
+    RC=$?
+
+    END=$(date +%s%3N)
+    ELAPSED=$((END - START))
+
+    RESULT=$(echo "$RESULT" | xargs)
+
+    if [ "$RC" -eq 0 ]; then
+
+        SERVER=$(echo "$RESULT" | awk -F'|' '{print $1}')
+        PORT=$(echo "$RESULT" | awk -F'|' '{print $2}')
+        ROLE=$(echo "$RESULT" | awk -F'|' '{print $3}')
+
+        if [ "$ROLE" = "REPLICA" ]; then
+            STATUS="OK"
+        else
+            STATUS="WARNING"
+        fi
+
+        echo "${TIMESTAMP} | STATUS=${STATUS} | SERVER=${SERVER} | ROLE=${ROLE} | ${ELAPSED}ms"
+
+        echo "${TIMESTAMP} | STATUS=${STATUS} | SERVER=${SERVER} | PORT=${PORT} | ROLE=${ROLE} | TIME=${ELAPSED}ms" \
+            >> "$REPLICA_LOG"
+
+    else
+
+        echo "${TIMESTAMP} | STATUS=FAIL | TIME=${ELAPSED}ms | ERROR=${RESULT}"
+
+        echo "${TIMESTAMP} | STATUS=FAIL | TIME=${ELAPSED}ms | ERROR=${RESULT}" \
+            >> "$REPLICA_LOG"
+
+    fi
+
+    sleep "$REPLICA_INTERVAL"
+
+done
+===============
+config.sh
+#!/bin/bash
+
+# ==========================================
+# Настройки подключения
+# ==========================================
+
+DB_HOST="192.168.1.100"       # VIP
+DB_NAME="keycloak"
+DB_USER="keycloak"
+
+# Пароль лучше задавать через PGPASSWORD
+# или ~/.pgpass, а не хранить здесь.
+#
+# export PGPASSWORD="пароль"
+
+# ==========================================
+# Порты
+# ==========================================
+
+DB_PRIMARY_PORT=5000
+DB_REPLICA_PORT=5001
+
+# ==========================================
+# Тест
+# ==========================================
+
+# Интервал между операциями RW-теста
+RW_INTERVAL=1
+
+# Интервал проверки Replica
+REPLICA_INTERVAL=2
+
+# Таймаут подключения
+CONNECT_TIMEOUT=2
+
+# ==========================================
+# Таблица
+# ==========================================
+
+TEST_TABLE="patroni_ha_test"
+
+# ==========================================
+# Логи
+# ==========================================
+
+LOG_DIR="/var/log/patroni-test"
+
+RW_LOG="${LOG_DIR}/db_rw_test.log"
+REPLICA_LOG="${LOG_DIR}/db_replica_test.log"
