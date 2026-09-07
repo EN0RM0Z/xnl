@@ -1,0 +1,288 @@
+using System;
+using System.IO;
+using System.Text;
+using System.Net.Mail;
+using System.Collections.Generic;
+using System.Diagnostics;
+
+namespace SmtpFileProcessor
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            if (args.Length < 1)
+            {
+                return; // Без аргументов завершаемся штатно и незаметно
+            }
+
+            string iniPath = args[0];
+            if (!File.Exists(iniPath))
+            {
+                // Если нет INI-файла, выводим окно через VBS по умолчанию, т.к. конфиг мы прочитать не можем
+                ShowDetachedErrorWindow("Критическая ошибка: Файл конфигурации INI не найден по пути:\r\n" + iniPath, "VBS");
+                return;
+            }
+
+            Dictionary<string, string> config = null;
+            try
+            {
+                config = ParseIniFile(iniPath);
+            }
+            catch (Exception ex)
+            {
+                ShowDetachedErrorWindow("Критическая ошибка чтения INI файла:\r\n" + ex.Message, "VBS");
+                return;
+            }
+
+            string textFilePath = GetConfigValue(config, "TextFilePath");
+            string sentDirectory = GetConfigValue(config, "SentDirectory");
+
+            // 1. Проверка наличия лог-файла
+            if (!File.Exists(textFilePath))
+            {
+                SendErrorAlert(config, "ВНИМАНИЕ: Отсутствует лог-файл", "Лог-файл не найден по указанному пути: " + textFilePath);
+                return;
+            }
+
+            string[] lines = null;
+            try
+            {
+                // 2. Проверка чтения файла
+                lines = File.ReadAllLines(textFilePath, Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                SendErrorAlert(config, "ВНИМАНИЕ: Ошибка чтения лог-файла", "Ошибка при чтении файла " + textFilePath + "\r\nТекст ошибки: " + ex.Message);
+                return;
+            }
+
+            // 3. Проверка содержимого (минимум 2 строки)
+            if (lines.Length < 2)
+            {
+                SendErrorAlert(config, "ВНИМАНИЕ: Некорректный формат лог-файла", "Лог-файл пустой или содержит менее 2 строк. Невозможно разделить текст на тело и тему.");
+                return;
+            }
+
+            // Основной блок обработки
+            try
+            {
+                string subject = lines[lines.Length - 1]; // Последняя строка — тема
+                
+                // Собираем тело письма с гарантированным \r\n для Windows-клиентов (например, Outlook)
+                StringBuilder bodyBuilder = new StringBuilder();
+                for (int i = 0; i < lines.Length - 1; i++)
+                {
+                    bodyBuilder.Append(lines[i]).Append("\r\n");
+                }
+                string body = bodyBuilder.ToString();
+                
+                // 4. Отправка сообщения
+                bool isSent = SendEmailInternal(config, subject, body);
+                
+                if (!isSent)
+                {
+                    // Если отправка не удалась, окно с ошибкой уже вызвано внутри SendEmailInternal
+                    // Просто штатно завершаем программу
+                    return; 
+                }
+
+                // Перенос файла в папку отправленных
+                if (!Directory.Exists(sentDirectory))
+                {
+                    Directory.CreateDirectory(sentDirectory);
+                }
+
+                string fileName = Path.GetFileName(textFilePath);
+                string destinationPath = Path.Combine(sentDirectory, fileName);
+
+                // Защита от перезаписи старых файлов
+                if (File.Exists(destinationPath))
+                {
+                    File.Delete(destinationPath);
+                }
+
+                File.Move(textFilePath, destinationPath);
+            }
+            catch (Exception ex)
+            {
+                SendErrorAlert(config, "ВНИМАНИЕ: Системный сбой программы", "Внутренняя ошибка обработки программы:\r\n" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Отправка писем. Возвращает true при успехе. 
+        /// В случае сбоя вызывает отдельное окно и возвращает false.
+        /// </summary>
+        static bool SendEmailInternal(Dictionary<string, string> config, string subject, string body)
+        {
+            string smtpServer = GetConfigValue(config, "SmtpServer");
+            string fromAddress = GetConfigValue(config, "From");
+            string toAddresses = GetConfigValue(config, "To");
+            
+            // Читаем режим окна из конфига. Если пусто, по умолчанию VBS
+            string errorMode = GetConfigValueOptional(config, "ErrorWindowMode", "VBS");
+
+            try
+            {
+                using (MailMessage message = new MailMessage())
+                {
+                    message.From = new MailAddress(fromAddress);
+                    
+                    string[] recipients = toAddresses.Split(new char[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (string recipient in recipients)
+                    {
+                        message.To.Add(new MailAddress(recipient.Trim()));
+                    }
+
+                    message.Subject = subject;
+                    message.Body = body;
+                    message.SubjectEncoding = Encoding.UTF8;
+                    message.BodyEncoding = Encoding.UTF8;
+
+                    using (SmtpClient smtpClient = new SmtpClient(smtpServer))
+                    {
+                        smtpClient.UseDefaultCredentials = false; 
+                        smtpClient.Send(message);
+                    }
+                }
+                return true; // Успешно отправлено
+            }
+            catch (Exception ex)
+            {
+                // Вызываем независимое всплывающее окно
+                string errorMsg = "ОШИБКА ОТПРАВКИ ПОЧТЫ.\r\n\r\nСервер: " + smtpServer + "\r\nОшибка: " + ex.Message;
+                ShowDetachedErrorWindow(errorMsg, errorMode);
+                
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Вспомогательный метод для алертов (если нет файла или он битый)
+        /// </summary>
+        static void SendErrorAlert(Dictionary<string, string> config, string subject, string errorBody)
+        {
+            SendEmailInternal(config, subject, errorBody);
+        }
+
+        /// <summary>
+        /// Вызывает стандартное окно Windows с сообщением об ошибке в виде отдельного независимого процесса.
+        /// Поддерживает режимы "VBS" и "PS" (PowerShell).
+        /// </summary>
+        static void ShowDetachedErrorWindow(string message, string mode)
+        {
+            try
+            {
+                bool usePowerShell = string.Equals(mode, "PS", StringComparison.OrdinalIgnoreCase) || 
+                                     string.Equals(mode, "POWERSHELL", StringComparison.OrdinalIgnoreCase);
+
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+
+                if (usePowerShell)
+                {
+                    // РЕАЛИЗАЦИЯ POWERSHELL (через Base64)
+                    string base64Message = Convert.ToBase64String(Encoding.UTF8.GetBytes(message));
+                    
+                    string psCode = string.Format(
+                        "Add-Type -AssemblyName System.Windows.Forms; " +
+                        "[System.Windows.Forms.MessageBox]::Show(" +
+                        "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{0}')), " +
+                        "'Сбой фоновой отправки почты', 'OK', 'Error');", 
+                        base64Message);
+                    
+                    psi.FileName = "powershell.exe";
+                    psi.Arguments = "-WindowStyle Hidden -Command \"" + psCode + "\"";
+                }
+                else
+                {
+                    // РЕАЛИЗАЦИЯ VBSCRIPT (По умолчанию)
+                    string tempVbsPath = Path.Combine(Path.GetTempPath(), "smtp_error_" + Guid.NewGuid().ToString("N") + ".vbs");
+
+                    // Правильное экранирование кавычек и переносов строк для VBScript
+                    string[] messageLines = message.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None);
+                    for (int i = 0; i < messageLines.Length; i++)
+                    {
+                        messageLines[i] = "\"" + messageLines[i].Replace("\"", "\"\"") + "\"";
+                    }
+                    string vbsMessage = string.Join(" & vbCrLf & ", messageLines);
+
+                    string vbsContent = string.Format("MsgBox {0}, 16, \"Сбой фоновой отправки почты\"", vbsMessage);
+                    
+                    // wscript корректно читает кириллицу только в Unicode (UTF-16 LE)
+                    File.WriteAllText(tempVbsPath, vbsContent, Encoding.Unicode);
+
+                    psi.FileName = "wscript.exe";
+                    psi.Arguments = "\"" + tempVbsPath + "\"";
+                }
+                
+                Process.Start(psi);
+            }
+            catch
+            {
+                // Игнорируем ошибки отрисовки окна, чтобы гарантировать штатное завершение программы
+            }
+        }
+
+        /// <summary>
+        /// Парсер INI файла
+        /// </summary>
+        static Dictionary<string, string> ParseIniFile(string path)
+        {
+            Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string[] lines = File.ReadAllLines(path, Encoding.Default);
+
+            foreach (string line in lines)
+            {
+                string trimmed = line.Trim();
+                
+                if (string.IsNullOrEmpty(trimmed) || 
+                    trimmed.StartsWith(";") || 
+                    trimmed.StartsWith("#") || 
+                    (trimmed.StartsWith("[") && trimmed.EndsWith("]")))
+                {
+                    continue;
+                }
+
+                int separatorIndex = trimmed.IndexOf('=');
+                if (separatorIndex > 0)
+                {
+                    string key = trimmed.Substring(0, separatorIndex).Trim();
+                    string value = trimmed.Substring(separatorIndex + 1).Trim();
+                    
+                    if (!result.ContainsKey(key))
+                    {
+                        result.Add(key, value);
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Извлечение обязательных параметров из конфига
+        /// </summary>
+        static string GetConfigValue(Dictionary<string, string> config, string key)
+        {
+            if (!config.ContainsKey(key) || string.IsNullOrEmpty(config[key]))
+            {
+                throw new Exception("В INI файле отсутствует обязательный параметр: " + key);
+            }
+            return config[key];
+        }
+
+        /// <summary>
+        /// Извлечение необязательных параметров из конфига
+        /// </summary>
+        static string GetConfigValueOptional(Dictionary<string, string> config, string key, string defaultValue)
+        {
+            if (config.ContainsKey(key) && !string.IsNullOrEmpty(config[key]))
+            {
+                return config[key];
+            }
+            return defaultValue;
+        }
+    }
+}
