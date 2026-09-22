@@ -1,0 +1,39 @@
+#!/bin/bash
+
+PORT=8080
+LOG_FILE="/opt/keycloak/test-sms/sms.log"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+touch "$LOG_FILE"
+
+echo "========================================"
+echo " Test SMS Gateway"
+echo " Listening on 0.0.0.0:$PORT"
+echo " Log file: $LOG_FILE"
+echo "========================================"
+echo
+
+while true; do
+
+    REQUEST=$(timeout 5 ncat -l "$PORT" 2>/dev/null)
+
+    [ -z "$REQUEST" ] && continue
+
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+    echo
+    echo "========================================"
+    echo "[$TIMESTAMP] SMS REQUEST"
+    echo "========================================"
+    echo "$REQUEST"
+    echo "========================================"
+
+    {
+        echo "========================================"
+        echo "[$TIMESTAMP] SMS REQUEST"
+        echo "========================================"
+        echo "$REQUEST"
+        echo "========================================"
+    } >> "$LOG_FILE"
+
+done
