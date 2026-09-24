@@ -1,0 +1,11 @@
+# 1. Root CA
+sudo keytool -importcert -alias CA-ROOT-Company -file /opt/keycloak/25.0.6/conf/certs/CA-ROOT-Company.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+# 2. Промежуточные CA
+sudo keytool -importcert -alias MSK-CA01 -file /opt/keycloak/25.0.6/conf/certs/MSK-CA01.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+sudo keytool -importcert -alias MSK-CA02 -file /opt/keycloak/25.0.6/conf/certs/MSK-CA02.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+sudo keytool -importcert -alias MSK-CA03 -file /opt/keycloak/25.0.6/conf/certs/MSK-CA03.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+sudo keytool -importcert -alias MSK-CA04 -file /opt/keycloak/25.0.6/conf/certs/MSK-CA04.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
