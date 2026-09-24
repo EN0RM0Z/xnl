@@ -1,0 +1,39 @@
+1. Удаляем старый файл (если создали)
+bash
+sudo rm -f /opt/keycloak/25.0.6/conf/truststore.jks
+1
+2. Создаем новый файл в формате PKCS12
+Обратите внимание: расширение меняем на .p12, а в командах явно указываем -storetype PKCS12 (для кристальной чистоты, хотя в Java 21 он и так по умолчанию).
+bash
+# 1. Импортируем Root CA
+sudo keytool -importcert -alias CA-ROOT-Company -file /opt/keycloak/25.0.6/conf/certs/CA-ROOT-Company.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+# 2-5. Импортируем промежуточные CA
+sudo keytool -importcert -alias MSK-CA01 -file /opt/keycloak/25.0.6/conf/certs/MSK-CA01.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+sudo keytool -importcert -alias MSK-CA02 -file /opt/keycloak/25.0.6/conf/certs/MSK-CA02.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+sudo keytool -importcert -alias MSK-CA03 -file /opt/keycloak/25.0.6/conf/certs/MSK-CA03.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+sudo keytool -importcert -alias MSK-CA04 -file /opt/keycloak/25.0.6/conf/certs/MSK-CA04.cer -keystore /opt/keycloak/25.0.6/conf/truststore.p12 -storetype PKCS12 -storepass "MySuperSecretPassword123!" -noprompt
+
+1234567891011
+3. Назначаем права (обязательно!)
+bash
+sudo chown keycloak:keycloak /opt/keycloak/25.0.6/conf/truststore.p12
+sudo chmod 600 /opt/keycloak/25.0.6/conf/truststore.p12
+12
+4. Прописываем в keycloak.conf
+Открываем /opt/keycloak/25.0.6/conf/keycloak.conf и указываем путь к .p12. Keycloak сам поймет, что это PKCS12 по содержимому файла, но расширение .p12 делает конфигурацию максимально явной для любого администратора.
+properties
+spi-truststore-file-file=/opt/keycloak/25.0.6/conf/truststore.p12
+spi-truststore-file-password=MySuperSecretPassword123!
+spi-truststore-file-hostname-verification-policy=ANY
+123
+5. Перезапускаем и проверяем
+bash
+sudo systemctl restart keycloak
+sudo journalctl -u keycloak -n 30 --no-pager
+12
+Итог
+Используйте PKCS12 (.p12). Это современный стандарт, он безопаснее, универсальнее и полностью соответствует архитектуре Java 21 и Keycloak 25. Вы будете спать спокойно, зная, что используете актуальные best practices, а не легаси-костыли из эпохи Java 8.
