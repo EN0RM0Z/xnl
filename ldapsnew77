@@ -1,0 +1,127 @@
+ЭТАП 1. Подготовка сертификатов (Конвертация в PEM)
+Конвертируем все 5 файлов из DER в PEM и сохраняем в нашу папку. Выполните следующие команды (замените /путь/откуда/ на реальный путь, где сейчас лежат ваши .cer файлы):
+
+   sudo openssl x509 -inform DER -in /путь/откуда/CA-ROOT-Company.cer -outform PEM -out /opt/keycloak/25.0.6/conf/truststores/CA-ROOT-Company.pem
+   
+   sudo openssl x509 -inform DER -in /путь/откуда/MSK-CA01.cer -outform PEM -out /opt/keycloak/25.0.6/conf/truststores/MSK-CA01.pem
+   
+   sudo openssl x509 -inform DER -in /путь/откуда/MSK-CA02.cer -outform PEM -out /opt/keycloak/25.0.6/conf/truststores/MSK-CA02.pem
+   
+   sudo openssl x509 -inform DER -in /путь/откуда/MSK-CA03.cer -outform PEM -out /opt/keycloak/25.0.6/conf/truststores/MSK-CA03.pem
+   
+   sudo openssl x509 -inform DER -in /путь/откуда/MSK-CA04.cer -outform PEM -out /opt/keycloak/25.0.6/conf/truststores/MSK-CA04.pem
+
+(Если openssl выдаст ошибку unable to load certificate, значит файл уже в PEM. В таком случае просто скопируйте его: sudo cp /путь/откуда/file.cer /opt/keycloak/25.0.6/conf/truststores/file.pem).
+
+Убедитесь, что файлы созданы и выглядят как текст:
+Первая строка должна быть: -----BEGIN CERTIFICATE-----
+
+Проверка сертификатов
+Убедитесь, что все пять сертификатов корректны и читаемы.
+echo "=== CA-ROOT-Company.pem ==="; openssl x509 -in /opt/keycloak/conf/truststores/CA-ROOT-Company.pem -noout -subject -issuer -dates
+bash
+echo "=== MSK-CA01.pem ==="; openssl x509 -in /opt/keycloak/conf/truststores/MSK-CA01.pem -noout -subject -issuer -dates
+bash
+echo "=== MSK-CA02.pem ==="; openssl x509 -in /opt/keycloak/conf/truststores/MSK-CA02.pem -noout -subject -issuer -dates
+bash
+echo "=== MSK-CA03.pem ==="; openssl x509 -in /opt/keycloak/conf/truststores/MSK-CA03.pem -noout -subject -issuer -dates
+bash
+echo "=== MSK-CA04.pem ==="; openssl x509 -in /opt/keycloak/conf/truststores/MSK-CA04.pem -noout -subject -issuer -dates
+Если вы не хотите использовать echo, просто уберите часть до точки с запятой, оставив только openssl x509 ....
+
+
+ЭТАП 2. Настройка прав доступа (Критично для systemd)
+Служба Keycloak (пользователь keycloak) должна иметь право читать эти файлы, иначе при старте она их проигнорирует.
+Назначаем владельца и права:
+   sudo chown -R keycloak:keycloak /opt/keycloak/25.0.6/conf/truststores
+   sudo chmod -R 750 /opt/keycloak/25.0.6/conf/truststores
+   sudo chmod 640 /opt/keycloak/25.0.6/conf/truststores/*.pem
+
+ЭТАП 3. Конфигурация Keycloak (keycloak.conf)
+Теперь мы укажем Keycloak использовать эту папку.
+Откройте конфигурационный файл:
+   sudo vi /opt/keycloak/25.0.6/conf/keycloak.conf
+Удалите (или закомментируйте символом #) все старые строки, начинающиеся на spi-truststore-file-*, если вы их туда добавляли ранее.
+Добавьте в конец файла следующие две строки:
+   # Указываем папку, которую Keycloak просканирует и добавит в глобальный truststore
+truststore-paths=/opt/keycloak/25.0.6/conf/truststores/
+
+   
+   # Отключаем строгую проверку имени хоста для исходящих соединений.
+   # Это критично для Active Directory, так как в сертификатах DC часто нет поля SAN 
+   # или используются короткие имена, что вызывает ошибку SSLHandshakeException.
+   tls-hostname-verifier=ANY
+
+ЭТАП 4. Пересборка и перезапуск (Специфика Quarkus)
+В отличие от старых версий, Keycloak на базе Quarkus (версии 17+) кэширует конфигурацию. Изменения в keycloak.conf не подхватятся просто по systemctl restart. Нужно выполнить команду build.
+Выполните пересборку конфигурации (от имени root или пользователя keycloak, в зависимости от того, как у вас настроены права на папку bin и conf):
+   sudo /opt/keycloak/25.0.6/bin/kc.sh build
+Дождитесь сообщения Keycloak configuration updated successfully или подобного. Если будут ошибки доступа, убедитесь, что пользователь, от которого вы запускаете kc.sh build, имеет права на чтение conf/ и запись в conf/.kc-caches/.
+Перезапустите службу:
+   sudo systemctl restart keycloak
+Если вы видите строку Listening on... и нет ошибок вроде Unrecognized truststore format или Permission denied — значит, Keycloak успешно подхватил ваши PEM-сертификаты.
+
+Проверка, что truststore загружен
+Проверьте логи Keycloak при запуске. Вы должны увидеть сообщения об успешной загрузке truststore, например:
+
+INFO  [org.keycloak.truststore.TruststoreProvider] Truststore loaded from: /opt/keycloak/conf/truststores/
+Также можно проверить через Admin Console в разделе Server Info → Providers — должен отображаться провайдер truststore.
+
+===============================================
+Итоговая рекомендация для вашего случая
+Учитывая, что вы настраиваете truststore для LDAPS, вот что нужно сделать:
+
+Шаг	Команда / Действие
+1. Изменить keycloak.conf	Добавить truststore-paths=/opt/keycloak/conf/truststores/
+2. Пересобрать	sudo -u keycloak /opt/keycloak/25.0.6/bin/kc.sh build
+3. Перезапустить службу	sudo systemctl restart keycloak
+4. Проверить логи	journalctl -fu keycloak — убедиться, что truststore загружен
+Если вы не используете --optimized и запускаете Keycloak «как есть», шаг 2 можно пропустить — сервер сам пересоберётся при старте. Но для production-среды явная сборка + --optimized — это правильный и рекомендованный подход.
+===============================================
+
+
+ЭТАП 5. Настройка LDAP-провайдера в интерфейсе Keycloak
+Зайдите в Admin Console Keycloak.
+Выберите ваш Realm -> User federation -> Add provider -> ldap.
+Заполните базовые поля Для чистого LDAPS настройки должны быть такими:
+1. Connection URL
+ldaps://dc01.virtual.com:636
+(Обязательно протокол ldaps:// и порт 636. Имя контроллера замените на ваше).
+2. Enable StartTLS
+Off (Выключено)
+(При использовании ldaps:// шифрованный туннель устанавливается сразу. Включение StartTLS здесь вызовет ошибку подключения).
+3. Use Truststore SPI
+Always
+(Указывает Keycloak использовать глобальный truststore, куда мы положили ваши PEM-сертификаты через truststore-paths).
+4. Connection pooling
+On (Включено)
+(Оставляем включенным. Пулинг соединений полностью поддерживается для LDAPS и критически важен для производительности).
+5. Connection timeout
+5000 (или оставьте пустым/по умолчанию)
+(Значение в миллисекундах. 5 секунд — стандарт, чтобы Keycloak не зависал навечно, если контроллер домена недоступен).
+Всё. Остальные поля (Bind DN и пароль) уже заполнены вашей учеткой. Жмите Test connection.
+
+
+ЭТАП 6. Тестирование
+Прокрутите страницу настройки LDAP вниз.
+Нажмите Test connection.
+Ожидаемый результат: Зеленая плашка Success! Successfully connected to LDAP.
+Нажмите Test authentication.
+Ожидаемый результат: Зеленая плашка Success! Successfully connected to LDAP and authenticated.
+Если оба теста пройдены — нажимайте Save вверху страницы.
+Шпаргалка для диагностики (если что-то пошло не так)
+Ошибка PKIX path building failed / unable to find valid certification path:
+Keycloak не видит сертификаты. Проверьте, что в keycloak.conf указан верный путь в truststore-paths, что вы выполнили kc.sh build, и что файлы .pem действительно начинаются с -----BEGIN CERTIFICATE-----.
+Ошибка Hostname verification failed / No subject alternative names present:
+Значит, не сработала директива tls-hostname-verifier=ANY. Убедитесь, что она прописана в keycloak.conf и вы выполнили kc.sh build после её добавления.
+Ошибка Connection refused / Connection timed out:
+Сетевая проблема. Проверьте, что с сервера Keycloak доступен порт 636 на контроллере домена: openssl s_client -connect dc01.msk.company.local:636. Если соединение устанавливается и вы видите вывод сертификата — сеть в порядке.
+Теперь ваша конфигурация полностью соответствует современным стандартам Keycloak 25, не использует устаревших параметров и готова к безопасному обновлению в будущем!
+Копировать
+Спросить Qwen
+Объяснить
+Перевести(ru-RU)
+
+
+
+
