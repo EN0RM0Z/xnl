@@ -1,0 +1,10 @@
+sudo systemctl status firewalld
+Если firewalld активен, надёжнее добавить правило через него:
+
+bash
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.1.25" drop'
+sudo firewall-cmd --reload
+Чтобы правило сохранилось после перезагрузки при использовании чистого iptables, нужен пакет iptables-services и команда:
+
+bash
+sudo service iptables save
