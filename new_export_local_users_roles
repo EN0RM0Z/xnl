@@ -1,0 +1,150 @@
+nano export_local_users_roles.sh
+
+
+#!/bin/bash
+
+# ====== НАСТРОЙКИ ======
+DB_CONTAINER="mariadb"
+DB_NAME="keycloak"
+DB_USER="keycloak"
+DB_PASSWORD="password"
+
+REALM_ID="test"   # <-- укажи нужный realm
+
+OUTPUT_DIR="./export"
+mkdir -p "$OUTPUT_DIR"
+
+DATE=$(date +"%Y%m%d_%H%M%S")
+
+OUTPUT_FILE="$OUTPUT_DIR/local_users_roles_${REALM_ID}_$DATE.csv"
+
+HEADER='"ID";"USERNAME";"EMAIL";"FIRST_NAME";"LAST_NAME";"FEDERATION_LINK";"ROLES"'
+
+# ====== ФУНКЦИЯ ВЫГРУЗКИ ======
+run_query() {
+    local QUERY="$1"
+    local FILE="$2"
+
+    echo "$HEADER" > "$FILE"
+
+    docker exec -i "$DB_CONTAINER" mysql \
+        -u"$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" \
+        --batch --skip-column-names \
+        -e "$QUERY" >> "$FILE"
+}
+
+# ====== ЛОКАЛЬНЫЕ ПОЛЬЗОВАТЕЛИ И ИХ РОЛИ ======
+LOCAL_QUERY="
+SELECT CONCAT(
+    '\"', u.ID, '\";',
+    '\"', u.USERNAME, '\";',
+    '\"', IFNULL(u.EMAIL, ''), '\";',
+    '\"', IFNULL(u.FIRST_NAME, ''), '\";',
+    '\"', IFNULL(u.LAST_NAME, ''), '\";',
+    '\"', IFNULL(u.FEDERATION_LINK, ''), '\";',
+    '\"', IFNULL(
+        GROUP_CONCAT(
+            DISTINCT
+            CASE
+                WHEN r.ID IS NOT NULL AND r.CLIENT IS NULL
+                    THEN r.NAME
+                WHEN r.ID IS NOT NULL
+                    THEN CONCAT(c.CLIENT_ID, ':', r.NAME)
+            END
+            ORDER BY r.NAME
+            SEPARATOR ', '
+        ), ''
+    ), '\"'
+)
+FROM USER_ENTITY u
+LEFT JOIN USER_ROLE_MAPPING urm
+    ON urm.USER_ID = u.ID
+LEFT JOIN KEYCLOAK_ROLE r
+    ON r.ID = urm.ROLE_ID
+LEFT JOIN CLIENT c
+    ON c.ID = r.CLIENT
+WHERE u.REALM_ID = '${REALM_ID}'
+  AND u.FEDERATION_LINK IS NULL
+GROUP BY
+    u.ID,
+    u.USERNAME,
+    u.EMAIL,
+    u.FIRST_NAME,
+    u.LAST_NAME,
+    u.FEDERATION_LINK
+ORDER BY u.USERNAME;
+"
+
+# ====== ЗАПУСК ======
+echo "Экспорт локальных пользователей realm: $REALM_ID"
+
+run_query "$LOCAL_QUERY" "$OUTPUT_FILE"
+
+echo "Готово:"
+echo "$OUTPUT_FILE"
+
+
+nano export_realm_roles.sh
+
+#!/bin/bash
+
+# ====== НАСТРОЙКИ ======
+DB_CONTAINER="mariadb"
+DB_NAME="keycloak"
+DB_USER="keycloak"
+DB_PASSWORD="password"
+
+REALM_ID="test"   # <-- укажи нужный realm
+
+OUTPUT_DIR="./export"
+mkdir -p "$OUTPUT_DIR"
+
+DATE=$(date +"%Y%m%d_%H%M%S")
+
+OUTPUT_FILE="$OUTPUT_DIR/realm_roles_${REALM_ID}_$DATE.csv"
+
+HEADER='"ROLE_ID";"ROLE_NAME";"ROLE_TYPE";"CLIENT_ID";"DESCRIPTION"'
+
+# ====== ФУНКЦИЯ ВЫГРУЗКИ ======
+run_query() {
+    local QUERY="$1"
+    local FILE="$2"
+
+    echo "$HEADER" > "$FILE"
+
+    docker exec -i "$DB_CONTAINER" mysql \
+        -u"$DB_USER" -p"$DB_PASSWORD" -D "$DB_NAME" \
+        --batch --skip-column-names \
+        -e "$QUERY" >> "$FILE"
+}
+
+# ====== РОЛИ REALM И КЛИЕНТОВ ======
+ROLES_QUERY="
+SELECT CONCAT(
+    '\"', r.ID, '\";',
+    '\"', r.NAME, '\";',
+    '\"', CASE
+        WHEN r.CLIENT IS NULL THEN 'REALM'
+        ELSE 'CLIENT'
+    END, '\";',
+    '\"', IFNULL(c.CLIENT_ID, ''), '\";',
+    '\"', IFNULL(r.DESCRIPTION, ''), '\"'
+)
+FROM KEYCLOAK_ROLE r
+LEFT JOIN CLIENT c
+    ON c.ID = r.CLIENT
+WHERE r.REALM_ID = '${REALM_ID}'
+   OR c.REALM_ID = '${REALM_ID}'
+ORDER BY
+    CASE WHEN r.CLIENT IS NULL THEN 0 ELSE 1 END,
+    c.CLIENT_ID,
+    r.NAME;
+"
+
+# ====== ЗАПУСК ======
+echo "Экспорт ролей realm: $REALM_ID"
+
+run_query "$ROLES_QUERY" "$OUTPUT_FILE"
+
+echo "Готово:"
+echo "$OUTPUT_FILE"
