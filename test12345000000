@@ -1,0 +1,30 @@
+Понял. Параметр `-e KC_DB_POOL_MAX_SIZE=50` сам по себе не сработает: его нужно было добавить в команду создания контейнера и заменить значение в `standalone.xml` на выражение. Я должен был чётче объяснить это до того, как ты попробовал.
+
+Давай сейчас ничего больше не менять, а проверим, что именно не сработало.
+
+Выполни:
+
+```
+docker exec keycloak printenv KC_DB_POOL_MAX_SIZE
+```
+
+И затем:
+
+```
+docker exec keycloak grep -n 'max-pool-size' /opt/jboss/keycloak/standalone/configuration/standalone.xml
+```
+
+Пришли оба результата.
+
+- Если первая команда ничего не выводит — переменная не передана внутрь контейнера.
+- Если вторая показывает `<max-pool-size>50</max-pool-size>`, то переменная никак не влияет на конфигурацию.
+- Если показывает `${env.KC_DB_POOL_MAX_SIZE:50}`, проверим, как WildFly разрешил выражение.
+
+Синтаксис `${env.NAME:значение}` действительно поддерживается WildFly для атрибутов, разрешающих выражения.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://docs.jboss.org\&sz=32)
+
+Latest WildFly Documentation
+
++1
+
