@@ -1,0 +1,41 @@
+Понял. По результатам уже можно сделать два вывода:
+
+- `"max-pool-size" => undefined` — параметр явно не задан в конфигурации datasource. Это не означает, что пул не имеет ограничения: применяется значение по умолчанию WildFly.
+- `"result" => false` — статистика пула сейчас отключена. Поэтому нулевые счётчики из предыдущего вывода нельзя использовать для оценки нагрузки.
+
+Включать статистику необязательно. Можно отдельно проверить действующий размер пула и фактические соединения в MariaDB.
+
+## 1. Узнать значение пула по умолчанию
+
+Выполни в контейнере Keycloak 16:
+
+```
+docker exec keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --controller=localhost:9990 --commands='/subsystem=datasources/data-source=KeycloakDS:read-resource-description'
+```
+
+Это покажет описание атрибутов datasource, но не обязательно раскроет значение по умолчанию. Поэтому надёжнее проверить конфигурацию и версию WildFly, а не полагаться только на `undefined`.
+
+## 2. Проверить реальные соединения в MariaDB
+
+Выполни в MariaDB:
+
+```
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'Max_used_connections';
+SHOW GLOBAL STATUS LIKE 'Threads_running';
+```
+
+Затем посмотри соединения именно пользователя Keycloak:
+
+```
+SELECT USER, HOST, DB, COMMAND, COUNT(*) AS connections
+FROM information_schema.PROCESSLIST
+GROUP BY USER, HOST, DB, COMMAND
+ORDER BY connections DESC;
+```
+
+Так мы увидим количество открытых соединений, в том числе простаивающих.
+
+Важное ограничение: эти запросы покажут текущее состояние и общий зарегистрированный пик MariaDB, но не докажут, что пул Keycloak исчерпан. Без статистики пула для этого потребуются дополнительные данные, например сообщения `IJ000453`, `IJ000655` или `IJ000604` в логах WildFly.
+
+Я бы пока не менял размер пула. Сначала посмотрим реальные соединения и логи — это позволит понять, есть ли вообще проблема с доступностью соединений к БД.
