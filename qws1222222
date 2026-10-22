@@ -1,0 +1,1 @@
+docker inspect keycloak --format 'Image={{.Config.Image}} Path={{.Path}} Args={{json .Args}}'
