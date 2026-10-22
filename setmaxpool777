@@ -1,0 +1,53 @@
+Да, в Keycloak 16 на WildFly можно изменить `max-pool-size` через CLI, не редактируя `standalone.xml` вручную.
+
+Поскольку у тебя сейчас параметр не задан и используется значение по умолчанию `20`, установим его явно в `50`.
+
+## 1. Изменить размер пула
+
+Выполни на Docker-хосте:
+
+```
+docker exec keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --controller=localhost:9990 --commands='/subsystem=datasources/data-source=KeycloakDS:write-attribute(name=max-pool-size,value=50)'
+```
+
+При успешном выполнении ожидается:
+
+```
+"outcome" => "success"
+```
+
+## 2. Проверить настройку
+
+```
+docker exec keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --controller=localhost:9990 --commands='/subsystem=datasources/data-source=KeycloakDS:read-attribute(name=max-pool-size)'
+```
+
+Ожидаемый результат:
+
+```
+"result" => 50
+```
+
+## 3. Применить изменение
+
+У тебя в описании параметра указано:
+
+```
+"restart-required" => "all-services"
+```
+
+Это означает, что изменение требует перезапуска служб WildFly. Для Docker проще всего выполнить перезапуск контейнера:
+
+```
+docker restart keycloak
+```
+
+Внимание: перезапуск прервёт текущие сессии и запросы на время запуска Keycloak. Выполняй его в подходящее окно обслуживания.
+
+После перезапуска повтори проверку `read-attribute`, чтобы убедиться, что значение `50` сохранилось.
+
+Важный нюанс: если контейнер пересоздаётся из образа, конфигурация может быть потеряна, если `standalone.xml` не хранится в постоянном томе. Перед изменением рекомендую сделать резервную копию:
+
+```
+docker cp keycloak:/opt/jboss/keycloak/standalone/configuration/standalone.xml ./standalone.xml.backup
+```
