@@ -1,0 +1,1 @@
+docker exec keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --controller=localhost:9990 --commands='/subsystem=datasources/data-source=KeycloakDS:read-resource-description'
