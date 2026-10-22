@@ -1,0 +1,91 @@
+Самый надёжный способ — посмотреть аргументы запущенного процесса WildFly. Если параметр `-c` указан, он определяет конфигурационный файл.
+
+Выполни:
+
+```
+docker exec keycloak ps -ef | grep '[o]rg.jboss.as.standalone'
+```
+
+Ищи в выводе один из вариантов:
+
+- `-c standalone-ha.xml` — используется `standalone-ha.xml`.
+- `-c standalone.xml` — используется `standalone.xml`.
+- Если параметра `-c` нет, в стандартном запуске WildFly используется `standalone.xml`, но entrypoint твоего образа Keycloak 16 может автоматически добавить `-c standalone-ha.xml`.
+
+Поэтому можно проверить и аргументы процесса Java напрямую:
+
+```
+docker exec keycloak sh -c 'tr "\000" " " < /proc/1/cmdline; echo'
+```
+
+Если PID 1 — это оболочка entrypoint, выполни первую команду: она покажет аргументы процесса WildFly.
+
+Не меняй конфигурацию, пока не установим точно, какой файл загружен.
+
+
+Согласен. Меняем `standalone-ha.xml` и подключаем его с хоста через bind mount. Собственный образ и стартовый скрипт не нужны. Для этого образа используется именно `standalone-ha.xml`.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://wjw465150.gitbooks.io\&sz=32)
+
+keycloak-documentation
+
++1
+
+
+
+Пойдём по шагам, сначала подготовим файл и сохраним текущие параметры контейнера. Пока контейнер не останавливай и не удаляй.
+
+## Шаг 1. Сохрани конфигурацию на хост
+
+Выполняй на машине, где работает Docker, в каталоге, куда хочешь сохранить файл:
+
+```
+mkdir -p /opt/keycloak16/config
+docker cp keycloak:/opt/jboss/keycloak/standalone/configuration/standalone-ha.xml /opt/keycloak16/config/standalone-ha.xml
+```
+
+Сделай резервную копию:
+
+```
+cp /opt/keycloak16/config/standalone-ha.xml /opt/keycloak16/config/standalone-ha.xml.bak
+```
+
+Проверь, что файл скопирован:
+
+```
+ls -l /opt/keycloak16/config/standalone-ha.xml*
+```
+
+## Шаг 2. Проверь datasource в скопированном файле
+
+```
+grep -n -A 25 -B 5 'pool-name="KeycloakDS"' /opt/keycloak16/config/standalone-ha.xml
+```
+
+Пришли вывод. На этом шаге ничего в XML пока не меняй — сначала убедимся, что скопированная конфигурация содержит нужный datasource.
+
+## Шаг 3. Сохраним параметры текущего контейнера
+
+До пересоздания контейнера нужно сохранить его настройки: порты, переменные окружения, сети, подключённые тома и аргументы запуска.
+
+Выполни:
+
+```
+docker inspect keycloak > /opt/keycloak16/container-inspect.json
+```
+
+И отдельно выведи порты, тома и сети:
+
+```
+docker inspect keycloak --format 'Ports={{json .HostConfig.PortBindings}}'
+docker inspect keycloak --format 'Binds={{json .HostConfig.Binds}}'
+docker inspect keycloak --format 'Networks={{json .NetworkSettings.Networks}}'
+```
+
+Пришли результаты команд из шагов 2 и 3. Затем внесём изменение `max-pool-size=50`, проверим XML и подготовим точную команду `docker run` с подключением файла:
+
+```
+-v /opt/keycloak16/config/standalone-ha.xml:/opt/jboss/keycloak/standalone/configuration/standalone-ha.xml
+```
+
+Важно: новая команда `docker run` должна повторять существующие параметры контейнера. Пока их не восстановили, не будем пересоздавать Keycloak, чтобы случайно не потерять подключение к базе или сетевые настройки.
