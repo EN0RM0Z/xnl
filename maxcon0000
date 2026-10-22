@@ -1,0 +1,28 @@
+По этому выводу видно, что статистика пула `KeycloakDS` доступна, но все счётчики равны нулю. Это не обязательно означает, что Keycloak не использует базу данных. Скорее всего, статистика пула отключена либо счётчики ещё не собирались после её включения.
+
+Например:
+
+- `InUseCount = 0` — сейчас занятых соединений по статистике нет.
+- `CreatedCount = 0` — счётчик созданных соединений равен нулю.
+- `MaxUsedCount = 0` — зарегистрированного пика использования нет.
+- `WaitCount = 0` — зарегистрированных ожиданий соединения нет.
+
+## 1. Проверим, включена ли статистика
+
+Выполни:
+
+```
+docker exec keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --controller=localhost:9990 --commands='/subsystem=datasources/data-source=KeycloakDS:read-attribute(name=statistics-enabled)'
+```
+
+Если вернётся `false`, включим статистику пула.
+
+## 2. Проверим текущее состояние datasource
+
+```
+docker exec keycloak /opt/jboss/keycloak/bin/jboss-cli.sh --connect --controller=localhost:9990 --commands='/subsystem=datasources/data-source=KeycloakDS:read-resource(include-runtime=true)'
+```
+
+Нужно увидеть, включён ли datasource и какой `max-pool-size` применяется.
+
+Пока не увеличивай пул до 50. Сначала выясним, почему статистика нулевая. Если она отключена, можно включить её, подождать при обычной работе Keycloak и повторно проверить `InUseCount`, `MaxUsedCount` и `WaitCount`.
