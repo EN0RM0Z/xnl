@@ -1,0 +1,144 @@
+Верно. Если зависание происходит неожиданно, проверять вручную уже после сбоя недостаточно: к этому моменту Keycloak может восстановиться или контейнер будет перезапущен скриптом.
+
+Нужно заранее запустить автоматический мониторинг, который будет каждую минуту проверять два независимых направления и сохранять результат в журнал:
+
+1. MariaDB изнутри своего контейнера — отвечает ли сама БД.
+2. MariaDB из контейнера Keycloak — удаётся ли приложению установить новое соединение по адресу `mariadb:3306`.
+
+Тогда, когда Keycloak зависнет, мы сможем сравнить записи за нужный период, даже если автоматический скрипт уже перезапустил контейнер.
+
+Важно: успешная проверка не гарантирует, что все запросы Keycloak работают; она показывает только доступность нового соединения и выполнение простого SQL-запроса.
+
+## 1. Создай скрипт мониторинга на Docker-хосте
+
+Используем имена контейнеров `keycloak` и `mariadb`. Скрипт ничего не перезапускает и не меняет в настройках.
+
+Открой файл:
+
+```
+sudo mkdir -p /opt/keycloak/scripts
+sudo nano /opt/keycloak/scripts/check_db.sh
+```
+
+Вставь:
+
+```
+
+#!/bin/bash
+
+# Имена контейнеров
+KC_CONTAINER="keycloak"
+DB_CONTAINER="mariadb"
+
+# Данные подключения к MariaDB — укажи реальный пароль
+DB_USER="keycloak"
+DB_NAME="keycloak"
+DB_PASSWORD="ЗАМЕНИТЬ_НА_РЕАЛЬНЫЙ_ПАРОЛЬ"
+
+LOG_FILE="/var/log/keycloak-db-check.log"
+
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# 1. Проверка SQL: отвечает ли MariaDB
+START=$(date +%s%N)
+
+DB_RESULT=$(timeout 8 docker exec \
+    -e MYSQL_PWD="$DB_PASSWORD" \
+    "$DB_CONTAINER" \
+    mariadb --protocol=tcp -h 127.0.0.1 \
+    --connect-timeout=3 \
+    -u "$DB_USER" -D "$DB_NAME" \
+    --batch --skip-column-names \
+    -e 'SELECT 1' 2>&1)
+DB_RC=$?
+
+END=$(date +%s%N)
+DB_MS=$(( (END - START) / 1000000 ))
+
+if [ "$DB_RC" -eq 0 ] && [ "$DB_RESULT" = "1" ]; then
+    DB_STATUS="OK"
+else
+    DB_STATUS="ERROR rc=$DB_RC result=$DB_RESULT"
+fi
+
+# 2. Проверка TCP из контейнера Keycloak к MariaDB
+START=$(date +%s%N)
+
+KC_RESULT=$(timeout 6 docker exec "$KC_CONTAINER" \
+    bash -c 'timeout 4 bash -c "</dev/tcp/mariadb/3306"' 2>&1)
+KC_RC=$?
+
+END=$(date +%s%N)
+KC_MS=$(( (END - START) / 1000000 ))
+
+if [ "$KC_RC" -eq 0 ]; then
+    KC_STATUS="OK"
+else
+    KC_STATUS="ERROR rc=$KC_RC result=$KC_RESULT"
+fi
+
+# Одна запись в журнал
+echo "$TIMESTAMP DB_SQL=$DB_STATUS DB_MS=${DB_MS}ms KC_TCP=$KC_STATUS KC_MS=${KC_MS}ms" \
+    >> "$LOG_FILE"
+
+```
+
+Перед запуском проверь пароль. Также убедись, что внутри контейнера MariaDB есть клиент `mariadb`, а внутри Keycloak — `bash`. Если команда клиента отсутствует, скрипт это зафиксирует; тогда подстроим проверку под фактический образ.
+
+## 2. Настрой права и проверь вручную
+
+```
+sudo chmod 700 /opt/keycloak/scripts/check_db.sh
+sudo touch /var/log/keycloak-db-check.log
+sudo chmod 600 /var/log/keycloak-db-check.log
+
+sudo /opt/keycloak/scripts/check_db.sh
+sudo tail -n 5 /var/log/keycloak-db-check.log
+```
+
+Пример успешной записи:
+
+```
+2026-10-23 09:00:00 DB_SQL=OK DB_MS=45ms KC_TCP=OK KC_MS=18ms
+```
+
+Пример возможного сбоя:
+
+```
+2026-10-23 09:10:00 DB_SQL=OK DB_MS=38ms KC_TCP=ERROR rc=124 result=... KC_MS=6005ms
+```
+
+Это примеры формата, не реальные результаты твоей системы.
+
+## 3. Запускай автоматически раз в минуту
+
+Открой планировщик от root:
+
+```
+sudo crontab -e
+```
+
+Добавь строку:
+
+```
+* * * * * /opt/keycloak/scripts/check_db.sh
+```
+
+После этого журнал будет накапливать результаты даже тогда, когда ты не наблюдаешь за сервером:
+
+```
+sudo tail -f /var/log/keycloak-db-check.log
+```
+
+## 4. Как трактовать результаты
+
+| `DB_SQL` | `KC_TCP` | Что можно заключить                                                     |
+| -------- | -------- | ----------------------------------------------------------------------- |
+| `OK`     | `OK`     | БД отвечает на SQL, TCP-подключение из Keycloak доступно                |
+| `ERROR`  | `OK`     | TCP-порт доступен, но SQL-проверка не прошла; нужно изучить ошибку      |
+| `OK`     | `ERROR`  | БД отвечает локально, но из Keycloak TCP-подключение не прошло          |
+| `ERROR`  | `ERROR`  | Возможна недоступность БД, но нужно исключить ошибки самого мониторинга |
+
+Учти: `KC_TCP` проверяет только установление TCP-соединения, а не авторизацию и выполнение SQL из Keycloak.
+
+Самое полезное при следующем зависании — сопоставить время ошибки в этом журнале с логами Keycloak и MariaDB. Это даст нам данные для диагностики вместо предположений.
