@@ -1,0 +1,185 @@
+
+#!/bin/bash
+
+# ===== НАСТРОЙКИ =====
+KC_CONTAINER="keycloak"
+DB_CONTAINER="mariadb"
+
+DB_USER="keycloak"
+DB_NAME="keycloak"
+DB_PASSWORD="ЗАМЕНИТЬ_НА_РЕАЛЬНЫЙ_ПАРОЛЬ"
+
+LOG_FILE="/var/log/keycloak-db-check.log"
+DIAG_DIR="/var/log/keycloak-db-diagnostics"
+
+# Минимальная пауза между подробными отчётами, секунды
+DETAIL_COOLDOWN=900
+
+# Таймауты проверок
+DB_TIMEOUT=8
+KC_TCP_TIMEOUT=6
+
+# Файлы состояния
+LAST_REPORT_FILE="/var/tmp/keycloak-db-last-report"
+LOCK_FILE="/var/tmp/keycloak-db-check.lock"
+
+# ===== ПОДГОТОВКА =====
+umask 077
+mkdir -p "$DIAG_DIR" || exit 1
+touch "$LOG_FILE" || exit 1
+chmod 600 "$LOG_FILE"
+
+# Не допускать одновременного запуска из cron
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# ===== ПРОВЕРКА SQL В MARIADB =====
+START=$(date +%s%N)
+
+DB_RESULT=$(timeout "$DB_TIMEOUT" \
+  docker exec -e MYSQL_PWD="$DB_PASSWORD" "$DB_CONTAINER" \
+  mariadb --protocol=tcp -h 127.0.0.1 \
+  --connect-timeout=3 -u "$DB_USER" -D "$DB_NAME" \
+  --batch --skip-column-names -e 'SELECT 1' 2>&1)
+DB_RC=$?
+
+END=$(date +%s%N)
+DB_MS=$(( (END - START) / 1000000 ))
+
+if [ "$DB_RC" -eq 0 ] && [ "$DB_RESULT" = "1" ]; then
+    DB_STATUS="OK"
+else
+    DB_STATUS="ERROR rc=$DB_RC result=$DB_RESULT"
+fi
+
+# ===== ПРОВЕРКА TCP ИЗ KEYCLOAK =====
+START=$(date +%s%N)
+
+KC_RESULT=$(timeout "$KC_TCP_TIMEOUT" \
+  docker exec "$KC_CONTAINER" \
+  bash -c 'timeout 4 bash -c "</dev/tcp/mariadb/3306"' 2>&1)
+KC_RC=$?
+
+END=$(date +%s%N)
+KC_MS=$(( (END - START) / 1000000 ))
+
+if [ "$KC_RC" -eq 0 ]; then
+    KC_STATUS="OK"
+else
+    KC_STATUS="ERROR rc=$KC_RC result=$KC_RESULT"
+fi
+
+# ===== ОБЫЧНЫЙ ЖУРНАЛ =====
+echo "$TIMESTAMP DB_SQL=$DB_STATUS DB_MS=${DB_MS}ms KC_TCP=$KC_STATUS KC_MS=${KC_MS}ms" \
+  >> "$LOG_FILE"
+
+# ===== НУЖЕН ЛИ ПОДРОБНЫЙ ОТЧЁТ =====
+if [ "$DB_RC" -eq 0 ] && [ "$DB_RESULT" = "1" ] && [ "$KC_RC" -eq 0 ]; then
+    exit 0
+fi
+
+NOW=$(date +%s)
+LAST_REPORT=0
+
+if [ -r "$LAST_REPORT_FILE" ]; then
+    read -r LAST_REPORT < "$LAST_REPORT_FILE"
+fi
+
+# Пока действует пауза — никаких подробных выгрузок
+if [[ "$LAST_REPORT" =~ ^[0-9]+$ ]] &&
+   (( NOW - LAST_REPORT < DETAIL_COOLDOWN )); then
+    exit 0
+fi
+
+# ===== СОЗДАНИЕ ПОДРОБНОГО ОТЧЁТА =====
+REPORT="$DIAG_DIR/db-diagnostic-$(date '+%Y%m%d-%H%M%S').log"
+
+{
+    echo "=================================================="
+    echo "Подробная диагностика MariaDB / Keycloak"
+    echo "Время начала: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "DB_SQL=$DB_STATUS"
+    echo "DB_MS=${DB_MS}ms"
+    echo "KC_TCP=$KC_STATUS"
+    echo "KC_MS=${KC_MS}ms"
+    echo "Пауза между отчётами: ${DETAIL_COOLDOWN} секунд"
+    echo "=================================================="
+
+    echo
+    echo "===== СОСТОЯНИЕ КОНТЕЙНЕРОВ ====="
+    timeout 8 docker inspect \
+      --format='Name={{.Name}} Status={{.State.Status}} Running={{.State.Running}} OOMKilled={{.State.OOMKilled}} RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}}' \
+      "$DB_CONTAINER" "$KC_CONTAINER" 2>&1
+
+    echo
+    echo "===== РЕСУРСЫ КОНТЕЙНЕРОВ ====="
+    timeout 8 docker stats --no-stream "$DB_CONTAINER" "$KC_CONTAINER" 2>&1
+
+    echo
+    echo "===== SHOW FULL PROCESSLIST ====="
+    timeout 8 docker exec -e MYSQL_PWD="$DB_PASSWORD" "$DB_CONTAINER" \
+      mariadb --protocol=tcp -h 127.0.0.1 \
+      --connect-timeout=3 -u "$DB_USER" -D "$DB_NAME" \
+      --table -e 'SHOW FULL PROCESSLIST' 2>&1
+
+    echo
+    echo "===== SHOW ENGINE INNODB STATUS ====="
+    timeout 8 docker exec -e MYSQL_PWD="$DB_PASSWORD" "$DB_CONTAINER" \
+      mariadb --protocol=tcp -h 127.0.0.1 \
+      --connect-timeout=3 -u "$DB_USER" -D "$DB_NAME" \
+      --table -e 'SHOW ENGINE INNODB STATUS' 2>&1
+
+    echo
+    echo "===== ВАЖНЫЕ СЧЁТЧИКИ MARIADB ====="
+    timeout 8 docker exec -e MYSQL_PWD="$DB_PASSWORD" "$DB_CONTAINER" \
+      mariadb --protocol=tcp -h 127.0.0.1 \
+      --connect-timeout=3 -u "$DB_USER" -D "$DB_NAME" \
+      --table -e "SHOW GLOBAL STATUS WHERE Variable_name IN (
+        'Threads_connected',
+        'Threads_running',
+        'Max_used_connections',
+        'Connections',
+        'Aborted_connects',
+        'Aborted_clients',
+        'Uptime'
+      )" 2>&1
+
+    echo
+    echo "===== ПАРАМЕТРЫ СОЕДИНЕНИЙ MARIADB ====="
+    timeout 8 docker exec -e MYSQL_PWD="$DB_PASSWORD" "$DB_CONTAINER" \
+      mariadb --protocol=tcp -h 127.0.0.1 \
+      --connect-timeout=3 -u "$DB_USER" -D "$DB_NAME" \
+      --table -e "SHOW GLOBAL VARIABLES WHERE Variable_name IN (
+        'max_connections',
+        'connect_timeout',
+        'wait_timeout',
+        'interactive_timeout',
+        'net_read_timeout',
+        'net_write_timeout'
+      )" 2>&1
+
+    echo
+    echo "===== ПОСЛЕДНИЕ 5 МИНУТ ЛОГА MARIADB ====="
+    timeout 8 docker logs --since 5m --timestamps "$DB_CONTAINER" 2>&1
+
+    echo
+    echo "===== ПОСЛЕДНИЕ 5 МИНУТ ЛОГА KEYCLOAK ====="
+    timeout 8 docker logs --since 5m --timestamps "$KC_CONTAINER" 2>&1
+
+    echo
+    echo "===== КОНЕЦ ОТЧЁТА ====="
+    echo "Время завершения: $(date '+%Y-%m-%d %H:%M:%S')"
+
+} > "$REPORT" 2>&1
+
+chmod 600 "$REPORT"
+
+# Пауза начинается после завершения формирования отчёта
+date +%s > "$LAST_REPORT_FILE"
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') Подробный отчёт: $REPORT" >> "$LOG_FILE"
+
+exit 0
+
