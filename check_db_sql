@@ -1,0 +1,11 @@
+# 1. Проверяем MariaDB SQL-запросом
+check_db_sql
+
+# 2. По умолчанию TCP-проверка не выполнялась
+KC_STATUS="NOT_CHECKED"
+KC_RESULT="TCP check skipped"
+
+# 3. TCP проверяем только при ошибке SQL
+if [[ "$DB_STATUS" != "UP" ]]; then
+    check_kc_tcp
+fi
