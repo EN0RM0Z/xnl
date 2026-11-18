@@ -1,0 +1,74 @@
+В Keycloak 16 (образ `jboss/keycloak:16.1.1`) эти параметры должны передаваться непосредственно JVM.
+
+Сразу исправлю опечатки в названиях системных свойств: правильно `ldap`, а не `Idap`.
+
+```
+-e JAVA_OPTS_APPEND="-Dcom.sun.jndi.ldap.connect.timeout=5000 -Dcom.sun.jndi.ldap.read.timeout=15000"
+```
+
+Значения:
+
+- `connect.timeout=5000` — таймаут установления LDAP-соединения: 5 секунд.
+- `read.timeout=15000` — таймаут ожидания ответа LDAP-сервера: 15 секунд.
+
+Важно: наличие переменной окружения в контейнере ещё не доказывает, что параметры попали в JVM.
+
+### **1. Проверить переменную окружения**
+
+На хосте:
+
+```
+docker exec keycloak printenv JAVA_OPTS_APPEND
+```
+
+Ожидаемый результат:
+
+```
+-Dcom.sun.jndi.ldap.connect.timeout=5000 -Dcom.sun.jndi.ldap.read.timeout=15000
+```
+
+### **2. Проверить параметры непосредственно в JVM**
+
+Это более надёжная проверка.
+
+Сначала найдём PID Java:
+
+```
+docker exec keycloak sh -c "ps -ef | grep '[j]ava'"
+```
+
+Затем проверим командную строку JVM:
+
+```
+docker exec keycloak sh -c "tr '\000' ' ' < /proc/1/cmdline"
+```
+
+Если Java не является PID 1, подставьте её PID вместо `1`.
+
+В командной строке должны присутствовать:
+
+```
+-Dcom.sun.jndi.ldap.connect.timeout=5000
+-Dcom.sun.jndi.ldap.read.timeout=15000
+```
+
+### **3. Самая точная проверка через jcmd**
+
+Если в контейнере установлен `jcmd`, выполните:
+
+```
+docker exec keycloak jcmd 1 VM.system_properties | grep 'com.sun.jndi.ldap'
+```
+
+Ожидаемый результат:
+
+```
+com.sun.jndi.ldap.connect.timeout=5000
+com.sun.jndi.ldap.read.timeout=15000
+```
+
+Если Java имеет другой PID, замените `1`.
+
+**Мой совет:** для вашего Keycloak 16 используйте третий способ, если доступен `jcmd`. Он показывает свойства уже запущенной JVM, а не просто переданные аргументы.
+
+Документация по механизму `JAVA_OPTS_APPEND`: [Keycloak configuration](https://github.com/keycloak/keycloak/blob/main/docs/guides/server/configuration-production.adoc?utm_source=chatgpt.com).
