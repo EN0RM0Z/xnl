@@ -1,0 +1,36 @@
+В образе `jboss/keycloak:16.1.1` утилита `ps` может отсутствовать — это минимальный образ.
+
+Можно обойтись без неё.
+
+**1. Посмотреть PID Java**
+
+```
+docker exec keycloak sh -c 'for p in /proc/[0-9]*; do tr "\000" " " < "$p/cmdline" 2>/dev/null | grep -q java && echo "PID=${p##*/}" && tr "\000" " " < "$p/cmdline"; done'
+```
+
+**2. Проверить параметры JVM**
+
+Если Java имеет PID 1:
+
+```
+docker exec keycloak sh -c 'tr "\000" "\n" < /proc/1/cmdline | grep "com.sun.jndi.ldap"'
+```
+
+Ожидаемый результат:
+
+```
+-Dcom.sun.jndi.ldap.connect.timeout=5000
+-Dcom.sun.jndi.ldap.read.timeout=15000
+```
+
+**3. Если PID Java отличается от 1**
+
+Подставьте найденный PID:
+
+```
+docker exec keycloak sh -c 'tr "\000" "\n" < /proc/PID/cmdline | grep "com.sun.jndi.ldap"'
+```
+
+Это проверяет именно аргументы запущенной JVM.
+
+**Важно:** если хотите проверить не только аргументы, но и фактически установленные системные свойства JVM, используйте `jcmd PID VM.system_properties`, если утилита доступна в контейнере.
