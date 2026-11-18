@@ -1,0 +1,25 @@
+docker exec mariadb mariadb -uroot -p -e "
+SHOW VARIABLES WHERE Variable_name IN (
+'innodb_buffer_pool_size',
+'max_connections',
+'sort_buffer_size',
+'join_buffer_size',
+'read_buffer_size',
+'read_rnd_buffer_size',
+'tmp_table_size',
+'max_heap_table_size',
+'table_open_cache'
+);
+"
+
+docker exec mariadb mariadb -uroot -p -e "
+SHOW GLOBAL STATUS WHERE Variable_name IN (
+'Threads_connected',
+'Max_used_connections',
+'Threads_running',
+'Created_tmp_tables',
+'Created_tmp_disk_tables',
+'Innodb_buffer_pool_pages_total',
+'Innodb_buffer_pool_pages_free'
+);
+"
