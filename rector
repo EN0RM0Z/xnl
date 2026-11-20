@@ -1,0 +1,15 @@
+2.Настройте Composer в Dockerfile на этот репозиторий и версию 2.8.5:Dockerfile в D:\x1Project\rector\image.Укажите в Dockerfile ваш Nexus-репозиторий для Composer и зафиксируйте версию rector/rector:2.8.5 (если доступ к репозиторию требует авторизации, добавьте логин/пароль или токен через composer config):DockerfileFROM composer:2
+
+ENV COMPOSER_ALLOW_SUPERUSER=1 \
+    COMPOSER_HOME=/tmp \
+    PATH="/tmp/vendor/bin:${PATH}"
+
+RUN composer config --global repo.packagist-org composer https://<ваш-nexus>/repository/packagist-org/ \
+    && composer config --global --unset repos.packagist \
+    && composer global require --prefer-dist --no-interaction rector/rector:2.8.5 \
+    && ln -sf /tmp/vendor/bin/rector /usr/local/bin/rector
+
+WORKDIR /project
+CMD ["rector"]
+Verification: файл D:\x1Project\rector\image\Dockerfile сохранён и содержит адрес вашего packagist-org и версию 2.8.5.3.Соберите образ и проверьте версию Rector:D:\x1Project\rector\image.Выполните сборку и проверьте установленную версию:DOScd /d D:\x1Project\rector\image && docker compose build && docker compose run --rm rector-build --version
+Verification: сборка завершается с кодом 0, а команда --version выводит Rector 2.8.5.Примечание: если внутри Dockerfile при composer global require появится ошибка 401/403 (авторизация в Nexus), для Composer задаются учётные данные через composer config --global http-basic.<хост-nexus> <логин> <пароль>.
