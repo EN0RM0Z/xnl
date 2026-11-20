@@ -1,0 +1,177 @@
+Для работы с проектом в `D:\x1Project\rector\phptest\slim-ms` удобно положить файлы запуска в `D:\x1Project\rector\phptest`: там будет `compose.yaml` (монтирующий `.\slim-ms` в `/project` внутри контейнера) и `Dockerfile` (опирающийся на ваш скачанный/собранный образ Rector, либо доустанавливающий Rector через Composer при сборке).
+
+Ниже — готовый набор файлов для `D:\x1Project\rector\phptest` и пошаговый запуск миграции с PHP 7.3 на 8.4.
+
+### Файлы в `D:\x1Project\rector\phptest`
+
+**1. `D:\x1Project\rector\phptest\Dockerfile**`
+*(Использует ваш локальный образ `local/rector:2.8.5` — если вы сохранили скачанный из Nexus образ под другим именем, просто замените строку `FROM` на него).*
+
+```dockerfile
+FROM local/rector:2.8.5
+
+WORKDIR /project
+ENTRYPOINT ["rector"]
+
+```
+
+**2. `D:\x1Project\rector\phptest\compose.yaml**`
+
+```yaml
+services:
+  rector:
+    image: local/rector-phptest:php84
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .\slim-ms:/project
+    working_dir: /project
+    command: ["process", "--dry-run"]
+
+```
+
+**3. Базовый `D:\x1Project\rector\phptest\slim-ms\rector.php` (начинаем с `php74` при переходе с `7.3`)**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+use Rector\Config\RectorConfig;
+
+return RectorConfig::configure()
+    ->withPaths([
+        __DIR__ . '/src',
+        __DIR__ . '/app',
+    ])
+    ->withPhpSets(
+        php74: true
+    );
+
+```
+
+---
+
+### Пошаговый запуск обновления (7.3 → 8.4)
+
+1. **Проверьте наличие проекта и сделайте резервную точку в Git:** D:\x1Project\rector\phptest\slim-ms.
+Убедитесь, что исходный код лежит в `D:\x1Project\rector\phptest\slim-ms`, и зафиксируйте текущее состояние в Git перед любыми правками:
+
+```cmd
+cd /d D:\x1Project\rector\phptest\slim-ms && git status
+
+```
+
+*Verification:* в каталоге `slim-ms` есть файлы проекта, а рабочий каталог Git чист (или вы сделали коммит/резервную копию).
+
+
+2. **Соберите образ сервиса и выполните dry-run:** D:\x1Project\rector\phptest.
+Перейдите в рабочую папку `D:\x1Project\rector\phptest` и запустите проверку без изменения файлов:
+
+```cmd
+cd /d D:\x1Project\rector\phptest && docker compose build && docker compose run --rm rector
+
+```
+
+*Verification:* сборка проходит с кодом `0`, Rector читает `rector.php` из `/project` и выводит предлагаемые изменения без правки файлов на диске.
+
+
+3. **Примените наборы правил по ступеням до PHP 8.4:** Пошаговое повышение версии PHP.
+Включайте наборы последовательно в `slim-ms\rector.php` (`php74: true`, затем `php80: true`, `php81: true`, `php82: true`, `php83: true`, `php84: true`) и после каждого шага запускайте применение изменений:
+
+```cmd
+cd /d D:\x1Project\rector\phptest && docker compose run --rm rector process
+git -C D:\x1Project\rector\phptest\slim-ms diff --stat
+
+```
+
+*Verification:* Rector обновляет файлы в `D:\x1Project\rector\phptest\slim-ms`, а `git diff --stat` показывает затронутые файлы для проверки перед следующим шагом.
+
+
+++++++++++++++++++++++++++++++++
+Ниже — шаблон `rector.php` для пошагового обновления проекта (`7.3` → `8.4`) с переключаемыми флагами версий PHP и базовым списком исключений (`->withSkip([...])`) под приложения на Slim Framework (middleware, контейнеры/DI, обработчики ошибок и шаблоны).
+
+Положите файл в корень вашего проекта — например, `D:\x1Project\rector\phptest\slim-ms\rector.php` — и включайте флаги по одному шагу за прогон (`php74` → `php80` → `php81` → `php82` → `php83` → `php84`).
+
+### Шаблон `rector.php` (PHP 7.3 → 8.4 + `withSkip` для Slim)
+
+```php
+<?php
+
+declare(strict_types=1);
+
+use Rector\Config\RectorConfig;
+use Rector\Php80\Rector\Class_\ClassPropertyAssignToConstructorPromotionRector;
+use Rector\Php81\Rector\Property\ReadOnlyPropertyRector;
+use Rector\Php82\Rector\Class_\ReadOnlyClassRector;
+use Rector\Php83\Rector\ClassMethod\AddOverrideAttributeToOverriddenMethodsRector;
+use Rector\Php84\Rector\Param\ExplicitNullableParamTypeRector;
+use Rector\TypeDeclaration\Rector\StmtsAwareInterface\DeclareStrictTypesRector;
+
+// Переключайте по одному флагу за шаг: 7.3 -> 7.4 -> 8.0 -> 8.1 -> 8.2 -> 8.3 -> 8.4
+$targetPhp = '7.4';
+
+return RectorConfig::configure()
+    ->withPaths([
+        __DIR__ . '/src',
+        __DIR__ . '/app',
+        __DIR__ . '/config',
+        __DIR__ . '/routes',
+    ])
+    ->withSkip([
+        // Типовые каталоги и сгенерированные/шаблонные файлы в Slim-проектах
+        __DIR__ . '/vendor',
+        __DIR__ . '/var/cache',
+        __DIR__ . '/templates',
+        __DIR__ . '/views',
+        '*/cache/*',
+
+        // Правила, которые часто шумят в middleware / DI / контрактах PSR-7 / PSR-15
+        // и в приложениях на Slim (где много анонимных замыканий, контейнеров и переопределений):
+        ClassPropertyAssignToConstructorPromotionRector::class,
+        ReadOnlyPropertyRector::class,
+        ReadOnlyClassRector::class,
+        AddOverrideAttributeToOverriddenMethodsRector::class,
+        DeclareStrictTypesRector::class,
+
+        // При необходимости точечно отключить конкретное правило PHP 8.4:
+        // ExplicitNullableParamTypeRector::class,
+    ])
+    ->withPhpSets(
+        php74: $targetPhp === '7.4',
+        php80: $targetPhp === '8.0',
+        php81: $targetPhp === '8.1',
+        php82: $targetPhp === '8.2',
+        php83: $targetPhp === '8.3',
+        php84: $targetPhp === '8.4',
+    );
+
+```
+
+### Как использовать по шагам
+
+1. **Оставьте включённым только первый целевой набор (7.4):** slim-ms\rector.php.
+Убедитесь, что в каталогах `withPaths([...])` указаны реальные папки вашего `slim-ms` (например, `src`, `config`, `public`), и проверьте значение `$targetPhp = '7.4'`.
+*Verification:* файл `D:\x1Project\rector\phptest\slim-ms\rector.php` сохранён без синтаксических ошибок (`php -l D:\x1Project\rector\phptest\slim-ms\rector.php`, если PHP установлен на хосте).
+
+
+2. **Прогоните dry-run и затем примените правки для текущей ступени:** D:\x1Project\rector\phptest.
+Сначала посмотрите изменения в режиме `--dry-run`, затем выполните `process` и проверьте `git diff`:
+
+```cmd
+cd /d D:\x1Project\rector\phptest && docker compose run --rm rector
+docker compose run --rm rector process
+git -C D:\x1Project\rector\phptest\slim-ms diff --stat
+
+```
+
+*Verification:* `git diff --stat` показывает правки только под выбранную ступень PHP, а исключённые каталоги (`vendor`, `templates`) не затронуты.
+
+
+3. **Переключите $targetPhp на '8.0', '8.1', '8.2', '8.3' и '8.4':** Следующие ступени.
+Зафиксируйте изменения текущей ступени в Git (`git commit`), поменяйте `$targetPhp` на следующую версию (`'8.0'`, затем `'8.1'` и так далее до `'8.4'`) и повторите цикл `dry-run` → `process` → проверка.
+*Verification:* после прогона `'8.4'` рабочий каталог чист или содержит проверенные изменения под PHP 8.4.
+
+
+> **Почему в `withSkip` вынесены `ReadOnlyClassRector` и `AddOverrideAttributeToOverriddenMethodsRector`:** в проектах на Slim часто встречаются классы middleware, обработчиков и контроллеров с изменяемым состоянием или обёртками поверх сторонних интерфейсов — массовое проставление `readonly` или `#[Override]` лучше включать точечно после базовой совместимости с PHP 8.4.
